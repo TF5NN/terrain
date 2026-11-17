@@ -41,7 +41,7 @@ fine cells are only needed close in.
 
 | Layer | Cell | Height step | Used for | Files | Size |
 |---|---|---|---|---|---|
-| `near` | 40 m | 2 m | out to 2 km | 7,391 tiles of 4 km | 29 MB |
+| `near` | 40 m | 2 m | 100 m to 2 km | 7,391 tiles of 4 km | 29 MB |
 | `fine` | 100 m | 20 m | 2 km to 15 km | 1,279 tiles of 10 km | 2.2 MB |
 | `medium` | 1 km | 1 m | 15 km to 100 km | one file | 155 KB |
 
@@ -56,25 +56,41 @@ mistake, so the near layer keeps 2 m steps.
 ## How good it is
 
 `npm test` compares the calculation with horizons computed straight from the
-10 m ArcticDEM data at three spots:
+10 m ArcticDEM data, counting terrain from 100 m outward:
 
 | Spot | Average difference | 95% of directions within |
 |---|---|---|
 | Reykjavík, Öskjuhlíð hill | +0.12° | 0.37° |
 | Foot of Esja, Kollafjörður | +0.37° | 1.09° |
 | Þingvellir | +0.20° | 0.45° |
+| Esja, top plateau | −0.14° | 0.99° |
+| Úlfarsfell hilltop | +0.65° | 2.48° |
+| Esja, steep south slope | −0.94° | 3.69° |
+| Vífilsfell, steep slope | +0.22° | 3.85° |
 
-Near the horizon a satellite climbs about a degree every 10–20 seconds, so
-this is a few seconds of pass time. In a trial with 792 real satellite passes
-per spot, 95% of rise and set times through terrain were within 6–13 seconds
-of the full-data answer. The worst cases, up to about 100 seconds, are passes
-that skim along a ridge line, where any small difference moves the time a lot.
+On gentle ground it is within about a degree and errs high. On hilltops and
+steep slopes, 40 m cells are coarse for the nearest few hundred metres, so the
+error is a few degrees and can go either way.
+
+Near the horizon a satellite climbs about a degree every 10–20 seconds, so on
+gentle ground this is a few seconds of pass time. In a trial with 792 real
+satellite passes at each of the first three spots, 95% of rise and set times
+through terrain were within 6–13 seconds of the full-data answer. The worst
+cases, up to about 100 seconds, are passes that skim along a ridge line, where
+any small difference moves the time a lot.
 
 What it does not know:
 
+- **Anything closer than 100 m.** At that range 40 m cells say more about
+  which cell you stand in than about the terrain, and on a hilltop or slope
+  they put up walls that are not there. So the wall beside you is not counted,
+  and on a steep slope the hillside right behind you counts for less than it
+  should: on the Esja slope above, the ground 10–100 m away rises 43° but the
+  horizon reports 19°.
+- The ground height at the spot is good to a couple of metres on gentle
+  ground and reads up to about 10 m high on steep slopes.
 - Buildings and trees are only partly in the data, and nothing built or grown
   since the survey is.
-- Nothing closer than 40 m, so not the wall you are standing beside.
 - Anywhere outside Iceland.
 
 ## File format (version 1)

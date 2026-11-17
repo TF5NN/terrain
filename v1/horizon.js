@@ -4,7 +4,7 @@
 // how many degrees the ground rises above the level line. It reads three layers
 // of "highest ground per cell" that live beside this file (see README.md):
 //
-//   near    40 m cells, heights in 2 m steps     used out to 2 km
+//   near    40 m cells, heights in 2 m steps     used from 100 m to 2 km
 //   fine    100 m cells, heights in 20 m steps   used from 2 km to 15 km
 //   medium  1 km cells                           used from 15 km to 100 km
 //
@@ -50,8 +50,11 @@ export function destination(lat, lon, bearingDeg, metres) {
 }
 
 // Where each layer is used, and how closely each ray is sampled, in metres.
+// Ground closer than 100 m is left out. At that range 40 m cells say more about which cell
+// you happen to stand in than about the terrain: on a hilltop or a steep slope they put up
+// walls that are not there. From 100 m outward they agree with the 10 m data.
 const ZONES = [
-  { layer: 'near', from: 40, to: 2000, every: 20 },
+  { layer: 'near', from: 100, to: 2000, every: 20 },
   { layer: 'fine', from: 2000, to: 15000, every: 50 },
   { layer: 'medium', from: 15000, to: 100000, every: 250 },
 ];

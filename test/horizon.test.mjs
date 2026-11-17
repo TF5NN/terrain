@@ -30,10 +30,13 @@ for (const spot of reference.spots) {
     const mean = diff.reduce((s, d) => s + d, 0) / diff.length;
     const sorted = diff.map(Math.abs).sort((a, b) => a - b);
     const p95 = sorted[Math.floor(sorted.length * 0.95)];
-    // Cells hold their highest ground, so the layers may read high, never much low.
-    assert(mean > -0.1 && mean < 0.8, `mean difference ${mean.toFixed(2)} degrees`);
-    assert(p95 < 1.5, `95% of directions within ${p95.toFixed(2)} degrees`);
-    assert(Math.abs(h.groundMetres - spot.groundMetres) < 6, `ground ${h.groundMetres} vs ${spot.groundMetres}`);
+    // Cells hold their highest ground, so on gentle ground the layers may read high, never much
+    // low. On hilltops and steep slopes 40 m cells are coarse for the nearest few hundred metres,
+    // and the limits are wider.
+    const limit = spot.steep ? { low: -1.5, high: 1.5, p95: 5 } : { low: -0.1, high: 0.8, p95: 1.5 };
+    assert(mean > limit.low && mean < limit.high, `mean difference ${mean.toFixed(2)} degrees`);
+    assert(p95 < limit.p95, `95% of directions within ${p95.toFixed(2)} degrees`);
+    assert(Math.abs(h.groundMetres - spot.groundMetres) < (spot.steep ? 12 : 6), `ground ${h.groundMetres} vs ${spot.groundMetres}`);
     assert(h.bytesFetched < 120 * 1024, `fetched ${h.bytesFetched} bytes`);
     console.log(`  ${spot.name}: mean ${mean >= 0 ? '+' : ''}${mean.toFixed(2)} deg, 95% within ${p95.toFixed(2)} deg, ground ${h.groundMetres.toFixed(0)} m (reference ${spot.groundMetres} m), ${(h.bytesFetched / 1024).toFixed(0)} KB`);
   });
