@@ -32,6 +32,32 @@ if (await terrain.covers(64.1293, -21.919)) {
 One horizon fetches about 25–55 KB in 8–18 small requests and takes well
 under a second.
 
+### Can one antenna see another?
+
+```js
+const seen = await terrain.sight({
+  from: { lat: 64.208, lon: -21.712, antennaMetres: 2 },
+  to: { lat: 63.97639, lon: -21.635, antennaMetres: 10 },
+});
+seen.clearanceMetres;   // least height of the line above the ground; negative = ground above the line
+seen.worstAtMetres;     // how far from `from` that is
+seen.distanceMetres; seen.bearingDegrees; seen.angleDegrees;   // where the far antenna is
+```
+
+`sight()` gives `null` when either end is outside the layers. It reads the
+40 m layer within 2 km of either end and the 100 m layer elsewhere; the middle
+of a long path is tried on the 1 km layer first and read finer only when that
+comes near the line. Ground within 100 m of either end is left out. One line
+fetches about 4 KB on average.
+
+Read the answer in three bands: 0 m or more is clear; down to −40 m is
+marginal (the line may in truth just clear); below that is blocked. Against
+the 10 m data, over 343 lines from 43 look-outs to eight hilltop sites: no
+blocked line was called clear, no clear line was called blocked, 310 of the
+330 blocked lines were called blocked outright and 10 of the 13 clear lines
+clear; the rest fell in the marginal band. It is plain geometry: no Fresnel
+zone and no bending over ridges, which Sightline's full profile works out.
+
 ## The idea
 
 Each cell of a layer holds the **highest ground inside it**, like the maximum
@@ -118,6 +144,7 @@ pip install numpy rasterio pyproj
 # https://pgc-opendata-dems.s3.us-west-2.amazonaws.com/arcticdem/mosaics/v4.1/10m/<square>/<square>_10m_v4.1_dem.tif
 python3 tools/build_layers.py /path/to/the/tifs       # about three minutes
 python3 tools/make_reference.py /path/to/the/tifs     # reference horizons for the tests
+python3 tools/make_sight_reference.py /path/to/the/tifs   # reference lines of sight for the tests
 npm test
 ```
 

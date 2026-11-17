@@ -41,6 +41,14 @@ const EARTH_RADIUS = 6371008.8;
 const REFRACTION_K = 4 / 3; // radio and light both bend a little over the horizon
 const DEG = Math.PI / 180;
 
+/** Distance in metres and true bearing in degrees from one point to another (spherical Earth). */
+export function span(lat1, lon1, lat2, lon2) {
+  const p1 = lat1 * DEG, p2 = lat2 * DEG, dl = (lon2 - lon1) * DEG;
+  const h = Math.sin((p2 - p1) / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  const bearing = Math.atan2(Math.sin(dl) * Math.cos(p2), Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl));
+  return { metres: 2 * EARTH_RADIUS * Math.asin(Math.min(1, Math.sqrt(h))), bearing: ((bearing / DEG) + 360) % 360 };
+}
+
 /** The point a given distance away on a true bearing (spherical Earth; ample for 100 km). */
 export function destination(lat, lon, bearingDeg, metres) {
   const d = metres / EARTH_RADIUS, b = bearingDeg * DEG, p1 = lat * DEG, l1 = lon * DEG;
@@ -58,6 +66,8 @@ const ZONES = [
   { layer: 'fine', from: 2000, to: 15000, every: 50 },
   { layer: 'medium', from: 15000, to: 100000, every: 250 },
 ];
+const NEAREST = 100; // ground closer than this to an antenna is left out
+const SURE_METRES = 100; // a path this far above the 1 km layer needs no finer look
 const KNOT = 5000; // rays are projected exactly every 5 km and straight in between
 
 async function gunzip(buffer) {
@@ -232,7 +242,76 @@ export async function openTerrain(baseUrl, options = {}) {
     };
   }
 
-  return { manifest, covers, heightAt, horizon, stats };
+  /**
+   * Whether one antenna can see another over the terrain between them.
+   *
+   * Works on the straight line between the two antennas with the Earth's curve added to the
+   * ground (4/3 radius). Within 2 km of either end it reads the 40 m layer, elsewhere the
+   * 100 m layer; the middle of a long path is first tried on the 1 km layer and only read
+   * finer if that comes close to the line. Ground within 100 m of either end is left out.
+   * Cells hold their highest ground, so a line reported clear is clear; a line reported
+   * blocked by a small amount may in fact just clear.
+   *
+   * @param {{from: {lat: number, lon: number, antennaMetres?: number}, to: {lat: number, lon: number, antennaMetres?: number}}} ends
+   * @returns clearanceMetres is the least height of the line above the ground (negative: the
+   *   ground is above the line); worstAtMetres is how far from `from` that is; angleDegrees is
+   *   how high the far antenna stands above the level line as seen from `from`. Null when
+   *   either end is outside the layers.
+   */
+  async function sight({ from, to }) {
+    if (!(await covers(from.lat, from.lon)) || !(await covers(to.lat, to.lon))) return null;
+    const before = { ...stats };
+    const { metres: D, bearing } = span(from.lat, from.lon, to.lat, to.lon);
+    const groundA = await heightAt(from.lat, from.lon), groundB = await heightAt(to.lat, to.lon);
+    const hA = groundA + (from.antennaMetres ?? 2), hB = groundB + (to.antennaMetres ?? 2);
+    const bulge = (d) => (d * (D - d)) / (2 * REFRACTION_K * EARTH_RADIUS);
+    const angleDegrees = Math.atan2(hB - hA - (D * D) / (2 * REFRACTION_K * EARTH_RADIUS), D) / DEG;
+    const result = (clearance, at) => ({
+      distanceMetres: D, bearingDegrees: bearing, clearanceMetres: clearance, worstAtMetres: at, angleDegrees,
+      fromGroundMetres: groundA, toGroundMetres: groundB,
+      bytesFetched: stats.bytes - before.bytes, requests: stats.requests - before.requests,
+    });
+    if (D <= 2 * NEAREST) return result(Math.min(hA - groundA, hB - groundB), 0);
+    // Exact grid positions along the path every 5 km, straight in between.
+    const knots = Math.ceil(D / KNOT) + 1, kx = new Float64Array(knots + 1), ky = new Float64Array(knots + 1);
+    for (let k = 0; k <= knots; k++) {
+      const p = k === 0 ? from : destination(from.lat, from.lon, bearing, k * KNOT);
+      const g = toGrid(p.lat, p.lon);
+      kx[k] = g.x; ky[k] = g.y;
+    }
+    /** Least clearance over the stretch of path whose distance to the nearer end is in [lo, hi). */
+    async function stretch(layer, every, lo, hi) {
+      const ds = [];
+      for (let d = NEAREST; d <= D - NEAREST; d += every) {
+        const m = Math.min(d, D - d);
+        if (m >= lo && m < hi) ds.push(d);
+      }
+      const xs = new Float64Array(ds.length), ys = new Float64Array(ds.length);
+      ds.forEach((d, i) => {
+        const k = Math.floor(d / KNOT), t = d / KNOT - k;
+        xs[i] = kx[k] * (1 - t) + kx[k + 1] * t;
+        ys[i] = ky[k] * (1 - t) + ky[k + 1] * t;
+      });
+      const heights = await sample(layer, xs, ys);
+      let least = Infinity, at = 0;
+      ds.forEach((d, i) => {
+        const clearance = hA + ((hB - hA) * d) / D - heights[i] - bulge(d);
+        if (clearance < least) { least = clearance; at = d; }
+      });
+      return { least, at };
+    }
+    const parts = [await stretch('near', 20, 0, 2000), await stretch('fine', 50, 2000, 15000)];
+    let middle = await stretch('medium', 250, 15000, Infinity);
+    // The 1 km layer reads high. Only when it comes near the line is the middle read again, finer.
+    // Not worth it when the ends already show the path well blocked.
+    const ends = Math.min(parts[0].least, parts[1].least);
+    if (middle.least < SURE_METRES && ends > -SURE_METRES) middle = await stretch('fine', 50, 15000, Infinity);
+    parts.push(middle);
+    const worst = parts.reduce((a, b) => (b.least < a.least ? b : a));
+    return result(worst.least, worst.at);
+  }
+
+  return { manifest, covers, heightAt, horizon, sight, stats };
 }
 
 /** The horizon's angle on any bearing, blended between the two nearest directions. */
