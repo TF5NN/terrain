@@ -46,7 +46,9 @@ seen.distanceMetres; seen.bearingDegrees; seen.angleDegrees;   // where the far 
 
 `terrain.profile({ from, to })` gives the ground along the same path instead:
 `distances` (metres from `from`) and `ground` (metres above sea level, without
-the Earth's curve), first and last being the two ends, about 6 KB a path.
+the Earth's curve), first and last being the two ends. One path on its own
+fetches about 10–85 KB depending on its length (the longest was 256 km); the
+same eight sites from one point came to about 180 KB.
 Sightline runs its radio link estimate on it for a first look at each station.
 Compared with the same estimate on the 10 m data, over 343 paths at 145 MHz:
 the margin differed by 0.6 dB in the middle case, 90% of paths were within
@@ -57,7 +59,8 @@ other five in the band next to it.
 40 m layer within 2 km of either end and the 100 m layer elsewhere; the middle
 of a long path is tried on the 1 km layer first and read finer only when that
 comes near the line. Ground within 100 m of either end is left out. One line
-fetches about 4 KB on average.
+on its own fetches about 10–35 KB; lines from the same spot share tiles, so
+eight hilltop sites around Iceland from one point came to about 105 KB.
 
 Read the answer in three bands: 0 m or more is clear; down to −40 m is
 marginal (the line may in truth just clear); below that is blocked. Against
