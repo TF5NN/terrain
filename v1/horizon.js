@@ -311,7 +311,54 @@ export async function openTerrain(baseUrl, options = {}) {
     return result(worst.least, worst.at);
   }
 
-  return { manifest, covers, heightAt, horizon, sight, stats };
+  /**
+   * The ground along the straight path between two points, for working out a radio link.
+   *
+   * Reads the 40 m layer within 2 km of either end and the 100 m layer in between, leaving out
+   * the 100 m next to each end (the ends themselves are given, from heightAt). Cells hold their
+   * highest ground, so the profile reads a little high: obstacles are never missed, and a
+   * diffraction loss worked out from it errs on the large side.
+   *
+   * @param {{from: {lat: number, lon: number}, to: {lat: number, lon: number}}} ends
+   * @returns distances[i] in metres from `from` and ground[i] in metres above sea level (the
+   *   Earth's curve is not added), first and last being the two ends. Null when either end is
+   *   outside the layers.
+   */
+  async function profile({ from, to }) {
+    if (!(await covers(from.lat, from.lon)) || !(await covers(to.lat, to.lon))) return null;
+    const before = { ...stats };
+    const { metres: D, bearing } = span(from.lat, from.lon, to.lat, to.lon);
+    const groundA = await heightAt(from.lat, from.lon), groundB = await heightAt(to.lat, to.lon);
+    const ds = [0];
+    for (let d = NEAREST; d <= D - NEAREST; d += Math.min(d, D - d) < 2000 ? 20 : 50) ds.push(d);
+    ds.push(D);
+    const distances = Float64Array.from(ds), ground = new Float32Array(ds.length);
+    ground[0] = groundA; ground[ds.length - 1] = groundB;
+    const knots = Math.ceil(D / KNOT) + 1, kx = new Float64Array(knots + 1), ky = new Float64Array(knots + 1);
+    for (let k = 0; k <= knots; k++) {
+      const p = k === 0 ? from : destination(from.lat, from.lon, bearing, k * KNOT);
+      const g = toGrid(p.lat, p.lon);
+      kx[k] = g.x; ky[k] = g.y;
+    }
+    for (const layer of ['near', 'fine']) {
+      const index = [];
+      for (let i = 1; i < ds.length - 1; i++) if ((Math.min(ds[i], D - ds[i]) < 2000) === (layer === 'near')) index.push(i);
+      const xs = new Float64Array(index.length), ys = new Float64Array(index.length);
+      index.forEach((i, j) => {
+        const k = Math.floor(ds[i] / KNOT), t = ds[i] / KNOT - k;
+        xs[j] = kx[k] * (1 - t) + kx[k + 1] * t;
+        ys[j] = ky[k] * (1 - t) + ky[k + 1] * t;
+      });
+      const heights = await sample(layer, xs, ys);
+      index.forEach((i, j) => { ground[i] = heights[j]; });
+    }
+    return {
+      distances, ground, distanceMetres: D, bearingDegrees: bearing,
+      bytesFetched: stats.bytes - before.bytes, requests: stats.requests - before.requests,
+    };
+  }
+
+  return { manifest, covers, heightAt, horizon, sight, profile, stats };
 }
 
 /** The horizon's angle on any bearing, blended between the two nearest directions. */

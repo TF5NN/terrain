@@ -49,3 +49,21 @@ test('no answer outside the layers, and a point sees itself', async () => {
   const here = await terrain.sight({ from: { lat: 64.1293, lon: -21.919, antennaMetres: 2 }, to: { lat: 64.1293, lon: -21.919, antennaMetres: 10 } });
   assert(here.clearanceMetres >= 2 && here.distanceMetres < 1);
 });
+
+test('the profile along a path has the same ends and the same tightest spot as sight()', async () => {
+  const ends = { from: { lat: 64.208, lon: -21.712, antennaMetres: 2 }, to: { lat: 63.97639, lon: -21.635, antennaMetres: 10 } };
+  const p = await terrain.profile(ends), seen = await terrain.sight(ends);
+  assert.equal(p.distances[0], 0);
+  assert(Math.abs(p.distances[p.distances.length - 1] - seen.distanceMetres) < 1e-6);
+  assert(p.distances.every((d, i) => i === 0 || d > p.distances[i - 1]), 'distances increase');
+  assert(Math.abs(p.ground[0] - seen.fromGroundMetres) < 1e-3 && Math.abs(p.ground[p.ground.length - 1] - seen.toGroundMetres) < 1e-3);
+  const D = seen.distanceMetres, hA = p.ground[0] + 2, hB = p.ground[p.ground.length - 1] + 10;
+  let least = Infinity;
+  for (let i = 1; i < p.distances.length - 1; i++) {
+    const d = p.distances[i];
+    least = Math.min(least, hA + ((hB - hA) * d) / D - p.ground[i] - (d * (D - d)) / (2 * (4 / 3) * 6371008.8));
+  }
+  assert(Math.abs(least - seen.clearanceMetres) < 3, `${least} against ${seen.clearanceMetres}`);
+  assert(p.bytesFetched < 40 * 1024);
+  assert.equal(await terrain.profile({ from: ends.from, to: { lat: 51.5, lon: -0.12 } }), null);
+});

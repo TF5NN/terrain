@@ -44,6 +44,15 @@ seen.worstAtMetres;     // how far from `from` that is
 seen.distanceMetres; seen.bearingDegrees; seen.angleDegrees;   // where the far antenna is
 ```
 
+`terrain.profile({ from, to })` gives the ground along the same path instead:
+`distances` (metres from `from`) and `ground` (metres above sea level, without
+the Earth's curve), first and last being the two ends, about 6 KB a path.
+Sightline runs its radio link estimate on it for a first look at each station.
+Compared with the same estimate on the 10 m data, over 343 paths at 145 MHz:
+the margin differed by 0.6 dB in the middle case, 90% of paths were within
+−4 to +1 dB, and 338 landed in the same band (good, marginal, unlikely), the
+other five in the band next to it.
+
 `sight()` gives `null` when either end is outside the layers. It reads the
 40 m layer within 2 km of either end and the 100 m layer elsewhere; the middle
 of a long path is tried on the 1 km layer first and read finer only when that
