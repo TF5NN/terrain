@@ -176,6 +176,29 @@ export async function openTerrain(baseUrl, options = {}) {
   }
 
   /**
+   * Reads one layer at many grid points, blended between the four cells around each point.
+   * Up close a single 40 m cell fills many degrees of the view; taking cells whole draws the
+   * skyline in flat steps. Blending follows the slope between them instead.
+   */
+  async function sampleBlended(name, xs, ys) {
+    const cell = layers[name].cellMetres, n = xs.length;
+    const cx = new Float64Array(n * 4), cy = new Float64Array(n * 4), wx = new Float32Array(n), wy = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const fx = (xs[i] - x0) / cell - 0.5, fy = (ys[i] - y0) / cell - 0.5, ix = Math.floor(fx), iy = Math.floor(fy);
+      wx[i] = fx - ix; wy[i] = fy - iy;
+      for (let c = 0; c < 4; c++) {
+        cx[i * 4 + c] = x0 + (ix + (c & 1) + 0.5) * cell;
+        cy[i * 4 + c] = y0 + (iy + (c >> 1) + 0.5) * cell;
+      }
+    }
+    const h = await sample(name, cx, cy), out = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      out[i] = h[i * 4] * (1 - wx[i]) * (1 - wy[i]) + h[i * 4 + 1] * wx[i] * (1 - wy[i]) + h[i * 4 + 2] * (1 - wx[i]) * wy[i] + h[i * 4 + 3] * wx[i] * wy[i];
+    }
+    return out;
+  }
+
+  /**
    * Ground height above sea level at a point, in metres, from the 40 m layer.
    * The layer stores the highest ground in each cell, so the four cells around
    * the point are blended and half a height step is taken off.
@@ -224,7 +247,7 @@ export async function openTerrain(baseUrl, options = {}) {
           ys[a * steps + s] = ky[a * knots + k] * (1 - t) + ky[a * knots + k + 1] * t;
         }
       }
-      const heights = await sample(zone.layer, xs, ys);
+      const heights = await (zone.layer === 'near' ? sampleBlended : sample)(zone.layer, xs, ys);
       for (let a = 0; a < count; a++) {
         let best = angles[a];
         for (let s = 0; s < steps; s++) {

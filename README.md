@@ -99,12 +99,16 @@ mistake, so the near layer keeps 2 m steps.
 | Spot | Average difference | 95% of directions within |
 |---|---|---|
 | Reykjavík, Öskjuhlíð hill | +0.12° | 0.37° |
-| Foot of Esja, Kollafjörður | +0.37° | 1.09° |
+| Foot of Esja, Kollafjörður | +0.32° | 0.99° |
 | Þingvellir | +0.20° | 0.45° |
-| Esja, top plateau | −0.14° | 0.99° |
-| Úlfarsfell hilltop | +0.65° | 2.48° |
-| Esja, steep south slope | −0.94° | 3.69° |
-| Vífilsfell, steep slope | +0.22° | 3.85° |
+| Esja, top plateau | −0.58° | 1.55° |
+| Úlfarsfell hilltop | +0.29° | 1.22° |
+| Esja, steep south slope | −1.27° | 3.62° |
+| Vífilsfell, steep slope | −0.14° | 3.64° |
+
+Within 2 km the 40 m cells are blended with their neighbours, not taken whole:
+a single cell 100 m away fills some 20° of the view, and taken whole it draws
+the skyline in flat steps.
 
 On gentle ground it is within about a degree and errs high. On hilltops and
 steep slopes, 40 m cells are coarse for the nearest few hundred metres, so the
