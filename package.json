@@ -1,0 +1,9 @@
+{
+  "name": "tf5nn-terrain",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Terrain layers for Iceland and a horizon calculation, shared by Northbound and Sightline.",
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test test/*.test.mjs" }
+}
