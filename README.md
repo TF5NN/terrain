@@ -1,5 +1,15 @@
 # Terrain layers for Iceland
 
+> **This is the branch `detail-near`, which is not merged.** It differs from
+> `main` in two ways: `profile()` reads the 10 m data within 2 km of each end,
+> counting the ground from 10 m out, and `horizon()` always reads the closest
+> 500 m from the 10 m data. The second went to `main` as an option
+> (`closeDetail`). The first was built and measured for Sightline's quick
+> station estimate and then set aside, because Sightline is to stay as it is;
+> the measurements are in `docs/terrain-layers.md` on Sightline's branch of the
+> same name. It is kept in case a version that works without a connection is
+> wanted, where the 10 m layer would be the finest data there is.
+
 Small terrain files for the whole of Iceland and one calculation on top of
 them: the **horizon** around a point, meaning how many degrees the ground
 rises above the level line in every compass direction.
