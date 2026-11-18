@@ -25,12 +25,17 @@ if (await terrain.covers(64.1293, -21.919)) {
 - `horizon.angles[i]` is the angle on true bearing `i × horizon.stepDegrees`
   (every half degree by default).
 - `antennaMetres` (default 2) is the height of the eye or antenna above ground.
+- `closeDetail: true` reads the ground under the viewer and the closest 500 m
+  from the 10 m data (the `detail` layer, below) instead of the 40 m layer:
+  sharper on hilltops and slopes, for about twice the download. Northbound
+  asks for it. Off unless asked for, and `horizon.closeDetail` says whether it
+  was used.
 - `covers()` is true on land in Iceland and false everywhere else.
 - It runs in browsers and in Node 20 or newer. Tiles are remembered, so a
   second horizon nearby is quick.
 
 One horizon fetches about 25–55 KB in 8–18 small requests and takes well
-under a second.
+under a second; with `closeDetail`, about 60–110 KB.
 
 ### Can one antenna see another?
 
@@ -137,6 +142,27 @@ Within 2 km the 40 m cells are blended with their neighbours, not taken whole:
 a single cell 100 m away fills some 20° of the view, and taken whole it draws
 the skyline in flat steps.
 
+With `closeDetail`, the same comparison:
+
+| Spot | 95% of directions within | Without it |
+|---|---|---|
+| Reykjavík, Öskjuhlíð hill | 0.37° | 0.37° |
+| Foot of Esja, Kollafjörður | 1.03° | 0.99° |
+| Þingvellir | 0.44° | 0.45° |
+| Esja, top plateau | 0.93° | 1.55° |
+| Úlfarsfell hilltop | 0.85° | 1.22° |
+| Esja, steep south slope | 3.06° | 3.62° |
+| Vífilsfell, steep slope | 2.27° | 3.64° |
+
+Hilltops come within a degree. Steep slopes improve but keep two to three
+degrees of error: a 10 m cell on a 40° slope spans nine metres of height, and
+only finer data would do better. Gentle ground is unchanged. Reading the 10 m
+data further out than 500 m changed none of these figures, so it is used only
+that far and the 40 m layer keeps 500 m to 2 km. The viewer's own ground height
+has to come from the 10 m data too: near terrain from the 10 m data seen from a
+viewer placed by the 40 m layer, which on a slope reads several metres high,
+came out worse than either (4.8° on the Esja slope).
+
 On gentle ground it is within about a degree and errs high. On hilltops and
 steep slopes, 40 m cells are coarse for the nearest few hundred metres, so the
 error is a few degrees and can go either way.
@@ -157,7 +183,8 @@ What it does not know:
   should: on the Esja slope above, the ground 10–100 m away rises 43° but the
   horizon reports 19°.
 - The ground height at the spot is good to a couple of metres on gentle
-  ground and reads up to about 10 m high on steep slopes.
+  ground and reads up to about 10 m high on steep slopes; with `closeDetail`
+  it is the 10 m data's own, good to a few metres there too.
 - Buildings and trees are only partly in the data, and nothing built or grown
   since the survey is.
 - Anywhere outside Iceland.

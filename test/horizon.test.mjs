@@ -42,6 +42,26 @@ for (const spot of reference.spots) {
   });
 }
 
+// With closeDetail the ground under the viewer and the closest 500 m come from the 10 m data.
+for (const spot of reference.spots) {
+  test(`horizon with closeDetail at ${spot.name}`, async () => {
+    const fresh = await openTerrain(base.href, { fetch: fileFetch });
+    const plain = await fresh.horizon({ lat: spot.lat, lon: spot.lon });
+    const h = await (await openTerrain(base.href, { fetch: fileFetch })).horizon({ lat: spot.lat, lon: spot.lon, closeDetail: true });
+    assert.equal(plain.closeDetail, false);
+    assert.equal(h.closeDetail, true);
+    const p95 = (r) => Array.from(r.angles, (a, i) => Math.abs(a - spot.angles[i])).sort((a, b) => a - b)[Math.floor(r.angles.length * 0.95)];
+    const mean = Array.from(h.angles, (a, i) => a - spot.angles[i]).reduce((s, d) => s + d, 0) / h.angles.length;
+    // Never noticeably worse than without it, and within tighter limits on hilltops and slopes.
+    assert(p95(h) < p95(plain) + 0.1, `95% within ${p95(h).toFixed(2)} degrees, against ${p95(plain).toFixed(2)} without`);
+    assert(p95(h) < (spot.steep ? 3.5 : 1.5) && Math.abs(mean) < (spot.steep ? 1.5 : 0.8), `mean ${mean.toFixed(2)}, 95% within ${p95(h).toFixed(2)} degrees`);
+    // The viewer's ground is the 10 m data's own, closer to the reference than the 40 m layer's on a slope.
+    assert(Math.abs(h.groundMetres - spot.groundMetres) < (spot.steep ? 6 : 3), `ground ${h.groundMetres} vs ${spot.groundMetres}`);
+    assert(h.bytesFetched < 260 * 1024, `fetched ${h.bytesFetched} bytes`);
+    console.log(`  ${spot.name}: 95% within ${p95(h).toFixed(2)} deg (${p95(plain).toFixed(2)} without), ground ${h.groundMetres.toFixed(0)} m (reference ${spot.groundMetres} m), ${(h.bytesFetched / 1024).toFixed(0)} KB (${(plain.bytesFetched / 1024).toFixed(0)} without)`);
+  });
+}
+
 test('angleAt blends between directions and wraps at north', async () => {
   const h = { angles: Float32Array.from([1, 3, 5, 7]), stepDegrees: 90 };
   assert.equal(angleAt(h, 45), 2);
