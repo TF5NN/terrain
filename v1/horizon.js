@@ -68,6 +68,7 @@ const ZONES = [
 ];
 const NEAREST = 100; // ground closer than this to an antenna is left out
 const CLOSE_IN = 500; // with closeDetail, the horizon is read from the 10 m data out to here
+const CLOSE_NEAREST = 10; // and with it, ground counts from this close to the viewer
 const SURE_METRES = 100; // a path this far above the 1 km layer needs no finer look
 const KNOT = 5000; // rays are projected exactly every 5 km and straight in between
 
@@ -220,8 +221,10 @@ export async function openTerrain(baseUrl, options = {}) {
    * The horizon seen from a point.
    * @param {{lat: number, lon: number, antennaMetres?: number, stepDegrees?: number, closeDetail?: boolean}} at
    *   closeDetail: read the ground under the viewer and the closest 500 m from the 10 m data (the
-   *   detail layer) instead of the 40 m layer. Sharper on hilltops and slopes, for about twice the
-   *   download. Off unless asked for.
+   *   detail layer) instead of the 40 m layer, and count the ground from 10 m out instead of
+   *   100 m. On a hilltop or a slope this is the difference between a horizon that is roughly
+   *   right and one that misses the hillside beside the viewer. About twice the download. Off
+   *   unless asked for; the result's closeDetail and nearestMetres say what was done.
    * @returns angles[i] is the terrain's elevation angle, in degrees, on true bearing i * stepDegrees
    */
   async function horizon({ lat, lon, antennaMetres = 2, stepDegrees = 0.5, closeDetail = false }) {
@@ -234,7 +237,12 @@ export async function openTerrain(baseUrl, options = {}) {
     const here = toGrid(lat, lon);
     const own = closeDetail && layers.detail ? (await detail([here.x], [here.y]))[0] : NaN;
     const ground = Number.isNaN(own) ? await heightAt(lat, lon) : own;
-    const zones = Number.isNaN(own) ? ZONES : [{ layer: 'detail', from: NEAREST, to: CLOSE_IN, every: 5 }, { ...ZONES[0], from: CLOSE_IN }, ...ZONES.slice(1)];
+    // The 10 m data draws no false walls close in, as the 40 m cells did, so with it the ground
+    // counts from 10 m out, not 100 m: on a slope, the hillside beside the viewer is the horizon.
+    const zones = Number.isNaN(own) ? ZONES : [
+      { layer: 'detail', from: CLOSE_NEAREST, to: NEAREST, every: 2.5 },
+      { layer: 'detail', from: NEAREST, to: CLOSE_IN, every: 5 },
+      { ...ZONES[0], from: CLOSE_IN }, ...ZONES.slice(1)];
     const eye = ground + antennaMetres;
     const count = Math.round(360 / stepDegrees);
     const angles = new Float32Array(count).fill(-90);
@@ -279,7 +287,7 @@ export async function openTerrain(baseUrl, options = {}) {
     }
     return {
       angles, stepDegrees, groundMetres: ground, eyeMetres: eye,
-      closeDetail: !Number.isNaN(own),
+      closeDetail: !Number.isNaN(own), nearestMetres: Number.isNaN(own) ? NEAREST : CLOSE_NEAREST,
       bytesFetched: stats.bytes - before.bytes, requests: stats.requests - before.requests,
     };
   }

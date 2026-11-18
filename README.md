@@ -26,10 +26,12 @@ if (await terrain.covers(64.1293, -21.919)) {
   (every half degree by default).
 - `antennaMetres` (default 2) is the height of the eye or antenna above ground.
 - `closeDetail: true` reads the ground under the viewer and the closest 500 m
-  from the 10 m data (the `detail` layer, below) instead of the 40 m layer:
-  sharper on hilltops and slopes, for about twice the download. Northbound
-  asks for it. Off unless asked for, and `horizon.closeDetail` says whether it
-  was used.
+  from the 10 m data (the `detail` layer, below) instead of the 40 m layer,
+  and counts the ground from 10 m out instead of 100 m. On a hilltop or a
+  slope that is the difference between a horizon that is roughly right and
+  one that misses the hillside beside you (see "How good it is"). About twice
+  the download. Northbound asks for it. Off unless asked for;
+  `horizon.closeDetail` and `horizon.nearestMetres` say what was done.
 - `covers()` is true on land in Iceland and false everywhere else.
 - It runs in browsers and in Node 20 or newer. Tiles are remembered, so a
   second horizon nearby is quick.
@@ -142,26 +144,48 @@ Within 2 km the 40 m cells are blended with their neighbours, not taken whole:
 a single cell 100 m away fills some 20° of the view, and taken whole it draws
 the skyline in flat steps.
 
-With `closeDetail`, the same comparison:
+**That comparison flatters steep ground**, because its reference leaves out the
+nearest 100 m just as the horizon does. On a slope, the hillside beside you is
+the horizon. Against the true skyline, taken from ArcticDEM's 2 m data from
+4 m out (`tools/make_close_reference.py`), 95% of directions are within:
 
-| Spot | 95% of directions within | Without it |
-|---|---|---|
-| Reykjavík, Öskjuhlíð hill | 0.37° | 0.37° |
-| Foot of Esja, Kollafjörður | 1.03° | 0.99° |
-| Þingvellir | 0.44° | 0.45° |
-| Esja, top plateau | 0.93° | 1.55° |
-| Úlfarsfell hilltop | 0.85° | 1.22° |
-| Esja, steep south slope | 3.06° | 3.62° |
-| Vífilsfell, steep slope | 2.27° | 3.64° |
+| Spot | Without `closeDetail` | With it | Read more than 2° too low, without / with |
+|---|---|---|---|
+| Reykjavík, Öskjuhlíð hill | 0.4° | 0.4° | none / none |
+| Foot of Esja, Kollafjörður | 1.0° | 1.0° | none / none |
+| Þingvellir | 0.5° | 0.4° | none / none |
+| Esja, top plateau | 2.0° | 0.6° | 5% / none |
+| Úlfarsfell hilltop | 12.9° | 2.2° | 28% / 6% |
+| Esja, steep south slope | 29.7° | 1.1° | 47% / none |
+| Vífilsfell, steep slope | 27.7° | 1.7° | 43% / none |
 
-Hilltops come within a degree. Steep slopes improve but keep two to three
-degrees of error: a 10 m cell on a 40° slope spans nine metres of height, and
-only finer data would do better. Gentle ground is unchanged. Reading the 10 m
-data further out than 500 m changed none of these figures, so it is used only
-that far and the 40 m layer keeps 500 m to 2 km. The viewer's own ground height
-has to come from the 10 m data too: near terrain from the 10 m data seen from a
-viewer placed by the 40 m layer, which on a slope reads several metres high,
-came out worse than either (4.8° on the Esja slope).
+So without `closeDetail` the horizon is good on ordinary ground and badly low
+on hilltops and slopes: it can call a direction clear when the ground beside
+you blocks it. With it, the worst spot is within about two degrees.
+
+How `closeDetail` was arrived at, each step measured at these spots:
+
+- The 10 m data in place of the 40 m layer, still from 100 m out, helped a
+  little (the steep spots in the first table went from 3.6° to 2.3–3.1°), and
+  only in the closest 500 m: reading it out to 1 km or 2 km changed nothing.
+  So it is used to 500 m and the 40 m layer keeps 500 m to 2 km.
+- The viewer's own ground height has to come from the 10 m data too. Near
+  terrain from the 10 m data seen from a viewer placed by the 40 m layer,
+  which on a slope reads several metres high, came out worse than either.
+- Counting the ground from closer in is what matters most. At the three worst
+  spots, 95% of directions were within 12.9–27.0° with the nearest 100 m left
+  out, 5.0–11.4° with 50 m, 1.7–4.2° with 25 m and 1.1–2.2° with 10 m.
+- The 100 m limit was there because 40 m cells put up walls that are not
+  there. With the 10 m data no direction at any spot read more than 2° too
+  high, at any of those limits.
+- Úlfarsfell keeps two degrees of error. The 2 m data has something 14° above
+  eye level within 25 m of that point, probably the mast or a structure on
+  the summit; the 10 m data smooths it away.
+
+Seven spots, three of them steep, is enough to show the direction and not
+enough to promise these figures everywhere. And with ground 10 m away
+counting, the answer on a slope depends on the position being right to a few
+metres.
 
 On gentle ground it is within about a degree and errs high. On hilltops and
 steep slopes, 40 m cells are coarse for the nearest few hundred metres, so the
@@ -176,12 +200,11 @@ any small difference moves the time a lot.
 
 What it does not know:
 
-- **Anything closer than 100 m.** At that range 40 m cells say more about
-  which cell you stand in than about the terrain, and on a hilltop or slope
-  they put up walls that are not there. So the wall beside you is not counted,
-  and on a steep slope the hillside right behind you counts for less than it
-  should: on the Esja slope above, the ground 10–100 m away rises 43° but the
-  horizon reports 19°.
+- **The nearest ground.** Without `closeDetail`, anything closer than 100 m:
+  at that range 40 m cells say more about which cell you stand in than about
+  the terrain, and put up walls that are not there, so it is left out, and on
+  a hilltop or slope the horizon reads far too low (the table above). With
+  `closeDetail`, anything closer than 10 m.
 - The ground height at the spot is good to a couple of metres on gentle
   ground and reads up to about 10 m high on steep slopes; with `closeDetail`
   it is the 10 m data's own, good to a few metres there too.
@@ -216,6 +239,7 @@ python3 tools/build_layers.py /path/to/the/tifs       # about three minutes
 python3 tools/build_detail.py /path/to/the/tifs       # the 10 m detail layer; about half an hour
 python3 tools/make_reference.py /path/to/the/tifs     # reference horizons for the tests
 python3 tools/make_detail_reference.py /path/to/the/tifs   # reference heights for the detail layer's test
+python3 tools/make_close_reference.py /path/to/the/tifs    # true horizons from the 2 m data (needs a connection)
 python3 tools/make_sight_reference.py /path/to/the/tifs   # reference lines of sight for the tests
 npm test
 ```

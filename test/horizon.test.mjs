@@ -42,25 +42,37 @@ for (const spot of reference.spots) {
   });
 }
 
-// With closeDetail the ground under the viewer and the closest 500 m come from the 10 m data.
-for (const spot of reference.spots) {
-  test(`horizon with closeDetail at ${spot.name}`, async () => {
-    const fresh = await openTerrain(base.href, { fetch: fileFetch });
-    const plain = await fresh.horizon({ lat: spot.lat, lon: spot.lon });
+// With closeDetail the ground under the viewer and the closest 500 m come from the 10 m data, and
+// the ground counts from 10 m out. Checked against the true skyline: ArcticDEM's 2 m data close in.
+const truth = JSON.parse(await readFile(new URL('./close-reference.json', import.meta.url), 'utf8'));
+const against = (h, spot) => {
+  const d = Array.from(h.angles, (a, i) => a - spot.angles[i]), abs = d.map(Math.abs).sort((a, b) => a - b);
+  return { mean: d.reduce((s, v) => s + v, 0) / d.length, p95: abs[Math.floor(abs.length * 0.95)],
+    low: d.filter((v) => v < -2).length / d.length, high: d.filter((v) => v > 2).length / d.length };
+};
+for (const spot of truth.spots) {
+  test(`horizon with closeDetail at ${spot.name} agrees with the true skyline`, async () => {
+    const plain = against(await (await openTerrain(base.href, { fetch: fileFetch })).horizon({ lat: spot.lat, lon: spot.lon }), spot);
     const h = await (await openTerrain(base.href, { fetch: fileFetch })).horizon({ lat: spot.lat, lon: spot.lon, closeDetail: true });
-    assert.equal(plain.closeDetail, false);
+    const got = against(h, spot);
     assert.equal(h.closeDetail, true);
-    const p95 = (r) => Array.from(r.angles, (a, i) => Math.abs(a - spot.angles[i])).sort((a, b) => a - b)[Math.floor(r.angles.length * 0.95)];
-    const mean = Array.from(h.angles, (a, i) => a - spot.angles[i]).reduce((s, d) => s + d, 0) / h.angles.length;
-    // Never noticeably worse than without it, and within tighter limits on hilltops and slopes.
-    assert(p95(h) < p95(plain) + 0.1, `95% within ${p95(h).toFixed(2)} degrees, against ${p95(plain).toFixed(2)} without`);
-    assert(p95(h) < (spot.steep ? 3.5 : 1.5) && Math.abs(mean) < (spot.steep ? 1.5 : 0.8), `mean ${mean.toFixed(2)}, 95% within ${p95(h).toFixed(2)} degrees`);
-    // The viewer's ground is the 10 m data's own, closer to the reference than the 40 m layer's on a slope.
-    assert(Math.abs(h.groundMetres - spot.groundMetres) < (spot.steep ? 6 : 3), `ground ${h.groundMetres} vs ${spot.groundMetres}`);
+    assert.equal(h.nearestMetres, 10);
+    // No false walls: the reason ground closer than 100 m was once left out.
+    assert(got.high < 0.01, `${(got.high * 100).toFixed(1)}% of directions read more than 2 degrees too high`);
+    assert(got.p95 < (spot.steep ? 3 : 1.5), `95% of directions within ${got.p95.toFixed(2)} degrees`);
+    assert(got.low < (spot.steep ? 0.1 : 0.01), `${(got.low * 100).toFixed(0)}% of directions read more than 2 degrees too low`);
+    assert(Math.abs(got.mean) < 0.8, `mean difference ${got.mean.toFixed(2)} degrees`);
+    assert(got.p95 <= plain.p95 + 0.1, 'never noticeably worse than without it');
     assert(h.bytesFetched < 260 * 1024, `fetched ${h.bytesFetched} bytes`);
-    console.log(`  ${spot.name}: 95% within ${p95(h).toFixed(2)} deg (${p95(plain).toFixed(2)} without), ground ${h.groundMetres.toFixed(0)} m (reference ${spot.groundMetres} m), ${(h.bytesFetched / 1024).toFixed(0)} KB (${(plain.bytesFetched / 1024).toFixed(0)} without)`);
+    console.log(`  ${spot.name}: 95% within ${got.p95.toFixed(2)} deg, ${(got.low * 100).toFixed(0)}% too low; without closeDetail ${plain.p95.toFixed(2)} deg, ${(plain.low * 100).toFixed(0)}% too low; ${(h.bytesFetched / 1024).toFixed(0)} KB`);
   });
 }
+
+test('without closeDetail the horizon says so, and leaves out the nearest 100 m', async () => {
+  const h = await terrain.horizon({ lat: 64.1293, lon: -21.919 });
+  assert.equal(h.closeDetail, false);
+  assert.equal(h.nearestMetres, 100);
+});
 
 test('angleAt blends between directions and wraps at north', async () => {
   const h = { angles: Float32Array.from([1, 3, 5, 7]), stepDegrees: 90 };
