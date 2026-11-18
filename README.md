@@ -70,6 +70,32 @@ blocked line was called clear, no clear line was called blocked, 310 of the
 clear; the rest fell in the marginal band. It is plain geometry: no Fresnel
 zone and no bending over ridges, which Sightline's full profile works out.
 
+### The 10 m data itself
+
+```js
+const g = toGrid(64.208, -21.712);                 // EPSG:3413 metres
+const heights = await terrain.detail([g.x], [g.y]); // metres above mean sea level
+```
+
+`terrain.detail(xs, ys)` reads the fourth layer, `detail`, which is different in
+kind from the other three: it is not "highest ground per cell" but a copy of
+ArcticDEM's 10 m mosaic, cell for cell on the same grid, to the nearest metre.
+It is of no use for a safe horizon. It is for a terrain profile that should
+match one read from ArcticDEM, and Sightline uses it for the first draft of a
+profile in Iceland.
+
+- Each height is blended from the four cells around the point, as Sightline
+  blends ArcticDEM's own files.
+- Sea reads 0. A hole in ArcticDEM (it has no data over much of the open sea)
+  reads `NaN`, never 0; so does anywhere outside the layers.
+- It is cut into 2 km tiles of about 9 KB. A path costs roughly 8–10 KB a
+  kilometre, against about 110 KB a kilometre from ArcticDEM's own files: on
+  five real paths of 6 to 99 km, 0.1–0.8 MB instead of 1.1–10.3 MB, and
+  Sightline's final link margin was the same to 0.01 dB.
+- `npm test` compares 600 points in four squares with the mosaics: none differs
+  by more than 0.8 m, and the layer is not biased high or low.
+- `terrain.hasDetail` says whether the layers have it.
+
 ## The idea
 
 Each cell of a layer holds the **highest ground inside it**, like the maximum
@@ -82,6 +108,7 @@ fine cells are only needed close in.
 | `near` | 40 m | 2 m | 100 m to 2 km | 7,391 tiles of 4 km | 29 MB |
 | `fine` | 100 m | 20 m | 2 km to 15 km | 1,279 tiles of 10 km | 2.2 MB |
 | `medium` | 1 km | 1 m | 15 km to 100 km | one file | 155 KB |
+| `detail` | 10 m | 1 m | profiles (not the horizon) | 30,424 tiles of 2 km | 272 MB |
 
 Because cells hold their highest ground and heights are rounded up, the
 horizon reads slightly high. That is deliberate: it is the safe side for
@@ -159,7 +186,9 @@ pip install numpy rasterio pyproj
 # fetch the 10 m mosaics for the squares listed in v1/manifest.json (about 2.9 GB) from
 # https://pgc-opendata-dems.s3.us-west-2.amazonaws.com/arcticdem/mosaics/v4.1/10m/<square>/<square>_10m_v4.1_dem.tif
 python3 tools/build_layers.py /path/to/the/tifs       # about three minutes
+python3 tools/build_detail.py /path/to/the/tifs       # the 10 m detail layer; about half an hour
 python3 tools/make_reference.py /path/to/the/tifs     # reference horizons for the tests
+python3 tools/make_detail_reference.py /path/to/the/tifs   # reference heights for the detail layer's test
 python3 tools/make_sight_reference.py /path/to/the/tifs   # reference lines of sight for the tests
 npm test
 ```

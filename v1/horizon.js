@@ -385,14 +385,15 @@ export async function openTerrain(baseUrl, options = {}) {
   // Not "highest ground per cell" like the layers above, so it is of no use for a safe horizon. It is
   // for a terrain profile that should match one read from ArcticDEM, at a fraction of the download.
   let detailBits = null;
-  const detailTiles = new Map(); // "ty_tx" -> Promise<Uint16Array | null>
+  const detailTiles = new Map(); // "ty_tx" -> Promise<Uint16Array | 'holes' | null>; null = all sea
   function detailTile(L, ty, tx) {
     const key = `${ty}_${tx}`;
     if (!detailTiles.has(key)) {
       detailTiles.set(key, (async () => {
-        if (tx < 0 || ty < 0 || tx >= L.tileCols || ty >= L.tileRows) return null;
-        detailBits ??= load(L.tilesFile).then((b) => new Uint8Array(b));
-        const bits = await detailBits, i = ty * L.tileCols + tx;
+        if (tx < 0 || ty < 0 || tx >= L.tileCols || ty >= L.tileRows) return 'holes'; // outside the layers
+        detailBits ??= Promise.all([load(L.tilesFile), load(L.holesFile)]).then((list) => list.map((b) => new Uint8Array(b)));
+        const [bits, holes] = await detailBits, i = ty * L.tileCols + tx;
+        if ((holes[i >> 3] >> (i & 7)) & 1) return 'holes';
         if (!((bits[i >> 3] >> (i & 7)) & 1)) return null; // all sea
         const bytes = await gunzip(await load(`detail/${key}.bin.gz`));
         const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), out = new Uint16Array(bytes.length / 2);
@@ -440,6 +441,7 @@ export async function openTerrain(baseUrl, options = {}) {
         const w = (c & 1 ? wx[i] : 1 - wx[i]) * (c >> 1 ? wy[i] : 1 - wy[i]);
         if (!(w > 0)) continue;
         const data = loaded.get(ty * 100000 + tx);
+        if (data === 'holes') continue;
         const raw = data ? data[(cy - ty * per) * per + (cx - tx * per)] : 0; // no tile: sea
         if (raw === L.noData) continue;
         sum += raw * L.heightStepMetres * w; weights += w;

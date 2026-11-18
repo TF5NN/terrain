@@ -66,6 +66,20 @@
    "rows": 500,
    "file": "medium.bin.gz",
    "totalBytes": 155121
+  },
+  "detail": {
+   "cellMetres": 10,
+   "cellsPerTile": 200,
+   "heightStepMetres": 1,
+   "bits": 16,
+   "noData": 65535,
+   "tileCols": 300,
+   "tileRows": 250,
+   "tileCount": 30424,
+   "totalBytes": 272368642,
+   "tilesFile": "detail/tiles.bin",
+   "holesFile": "detail/holes.bin",
+   "heights": "metres above mean sea level to the nearest metre, cell for cell as in the ArcticDEM 10 m mosaic (not the highest ground per cell); 0 = sea level or below; 65535 = no data; a tile in neither list is all sea"
   }
  }
 }
