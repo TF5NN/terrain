@@ -2,7 +2,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
-import { openTerrain, span } from '../v1/horizon.js';
+import { openTerrain, span, toGrid } from '../v1/horizon.js';
 
 const base = new URL('../v1/', import.meta.url);
 const fileFetch = async (url) => {
@@ -50,20 +50,24 @@ test('no answer outside the layers, and a point sees itself', async () => {
   assert(here.clearanceMetres >= 2 && here.distanceMetres < 1);
 });
 
-test('the profile along a path has the same ends and the same tightest spot as sight()', async () => {
+test('the profile along a path: the 10 m data near the ends, the 100 m layer between', async () => {
   const ends = { from: { lat: 64.208, lon: -21.712, antennaMetres: 2 }, to: { lat: 63.97639, lon: -21.635, antennaMetres: 10 } };
   const p = await terrain.profile(ends), seen = await terrain.sight(ends);
+  const last = p.distances.length - 1, D = p.distanceMetres;
   assert.equal(p.distances[0], 0);
-  assert(Math.abs(p.distances[p.distances.length - 1] - seen.distanceMetres) < 1e-6);
+  assert(Math.abs(D - seen.distanceMetres) < 1e-6 && Math.abs(p.distances[last] - D) < 1e-6);
   assert(p.distances.every((d, i) => i === 0 || d > p.distances[i - 1]), 'distances increase');
-  assert(Math.abs(p.ground[0] - seen.fromGroundMetres) < 1e-3 && Math.abs(p.ground[p.ground.length - 1] - seen.toGroundMetres) < 1e-3);
-  const D = seen.distanceMetres, hA = p.ground[0] + 2, hB = p.ground[p.ground.length - 1] + 10;
-  let least = Infinity;
-  for (let i = 1; i < p.distances.length - 1; i++) {
-    const d = p.distances[i];
-    least = Math.min(least, hA + ((hB - hA) * d) / D - p.ground[i] - (d * (D - d)) / (2 * (4 / 3) * 6371008.8));
-  }
-  assert(Math.abs(least - seen.clearanceMetres) < 3, `${least} against ${seen.clearanceMetres}`);
-  assert(p.bytesFetched < 40 * 1024);
+  assert.equal(p.distances[1], 10, 'the ground counts from 10 m out');
+  assert.equal(p.distances[2] - p.distances[1], 10, 'every 10 m near an end');
+  // The ends are the 10 m data's own heights there.
+  const a = toGrid(ends.from.lat, ends.from.lon), b = toGrid(ends.to.lat, ends.to.lon);
+  const own = await terrain.detail([a.x, b.x], [a.y, b.y]);
+  assert(Math.abs(p.ground[0] - own[0]) < 1e-3 && Math.abs(p.ground[last] - own[1]) < 1e-3);
+  // Near an end the 10 m data reads lower than the 40 m layer, which holds the highest ground of each cell.
+  assert(p.ground[0] <= seen.fromGroundMetres + 1.5, `${p.ground[0]} against ${seen.fromGroundMetres}`);
+  // In the middle it is the 100 m layer: heights in 20 m steps.
+  const mid = Math.floor(last / 2);
+  assert(Math.min(p.distances[mid], D - p.distances[mid]) > 2000 && p.ground[mid] % 20 === 0, `${p.ground[mid]} m at ${p.distances[mid]} m`);
+  assert(p.bytesFetched < 90 * 1024, `${p.bytesFetched} bytes`);
   assert.equal(await terrain.profile({ from: ends.from, to: { lat: 51.5, lon: -0.12 } }), null);
 });

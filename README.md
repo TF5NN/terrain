@@ -29,7 +29,7 @@ if (await terrain.covers(64.1293, -21.919)) {
 - It runs in browsers and in Node 20 or newer. Tiles are remembered, so a
   second horizon nearby is quick.
 
-One horizon fetches about 25–55 KB in 8–18 small requests and takes well
+One horizon fetches about 60–110 KB in a couple of dozen small requests and takes well
 under a second.
 
 ### Can one antenna see another?
@@ -46,9 +46,10 @@ seen.distanceMetres; seen.bearingDegrees; seen.angleDegrees;   // where the far 
 
 `terrain.profile({ from, to })` gives the ground along the same path instead:
 `distances` (metres from `from`) and `ground` (metres above sea level, without
-the Earth's curve), first and last being the two ends. One path on its own
-fetches about 10–85 KB depending on its length (the longest was 256 km); the
-same eight sites from one point came to about 180 KB.
+the Earth's curve), first and last being the two ends. Within 2 km of either
+end it is the 10 m data itself (the `detail` layer, below), counting the ground
+from 10 m out; between, the 100 m layer. The ÍRA repeater sites from one point
+came to about 400–470 KB.
 Sightline runs its radio link estimate on it for a first look at each station.
 Compared with the same estimate on the 10 m data, over 343 paths at 145 MHz:
 the margin differed by 0.6 dB in the middle case, 90% of paths were within
@@ -126,20 +127,24 @@ mistake, so the near layer keeps 2 m steps.
 | Spot | Average difference | 95% of directions within |
 |---|---|---|
 | Reykjavík, Öskjuhlíð hill | +0.12° | 0.37° |
-| Foot of Esja, Kollafjörður | +0.32° | 0.99° |
-| Þingvellir | +0.20° | 0.45° |
-| Esja, top plateau | −0.58° | 1.55° |
-| Úlfarsfell hilltop | +0.29° | 1.22° |
-| Esja, steep south slope | −1.27° | 3.62° |
-| Vífilsfell, steep slope | −0.14° | 3.64° |
+| Foot of Esja, Kollafjörður | +0.37° | 1.03° |
+| Þingvellir | +0.20° | 0.44° |
+| Esja, top plateau | −0.20° | 0.93° |
+| Úlfarsfell hilltop | +0.32° | 0.85° |
+| Esja, steep south slope | +1.32° | 3.06° |
+| Vífilsfell, steep slope | +0.58° | 2.27° |
 
-Within 2 km the 40 m cells are blended with their neighbours, not taken whole:
-a single cell 100 m away fills some 20° of the view, and taken whole it draws
-the skyline in flat steps.
+The closest 500 m, and the ground under the viewer, are read from the 10 m
+data itself (the `detail` layer), not from the 40 m layer: up close, 40 m cells
+are coarse, and on a slope they put the viewer several metres too high. Taking
+the 10 m data further out than 500 m changed nothing in these figures. From
+500 m to 2 km the 40 m cells are blended with their neighbours, not taken
+whole.
 
-On gentle ground it is within about a degree and errs high. On hilltops and
-steep slopes, 40 m cells are coarse for the nearest few hundred metres, so the
-error is a few degrees and can go either way.
+On gentle ground it is within about a degree and errs high. On hilltops it is
+within a degree too. On steep slopes the error is still two to three degrees:
+a 10 m cell on a 40° slope spans nine metres of height, and only finer data
+than this would do better.
 
 Near the horizon a satellite climbs about a degree every 10–20 seconds, so on
 gentle ground this is a few seconds of pass time. In a trial with 792 real
@@ -150,14 +155,14 @@ any small difference moves the time a lot.
 
 What it does not know:
 
-- **Anything closer than 100 m.** At that range 40 m cells say more about
-  which cell you stand in than about the terrain, and on a hilltop or slope
-  they put up walls that are not there. So the wall beside you is not counted,
-  and on a steep slope the hillside right behind you counts for less than it
-  should: on the Esja slope above, the ground 10–100 m away rises 43° but the
-  horizon reports 19°.
-- The ground height at the spot is good to a couple of metres on gentle
-  ground and reads up to about 10 m high on steep slopes.
+- **Anything closer than 100 m, for the horizon.** The limit was set when the
+  nearest ground came from 40 m cells, which put up walls that are not there.
+  It has not been re-measured for the 10 m data, so it stands: the wall beside
+  you is not counted, and on a steep slope the hillside right behind you
+  counts for less than it should. (`profile()` does count the ground from
+  10 m out.)
+- The ground height at the spot is the 10 m data's: good to a metre or two on
+  gentle ground, and to a few metres on steep slopes.
 - Buildings and trees are only partly in the data, and nothing built or grown
   since the survey is.
 - Anywhere outside Iceland.

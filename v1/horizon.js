@@ -67,6 +67,9 @@ const ZONES = [
   { layer: 'medium', from: 15000, to: 100000, every: 250 },
 ];
 const NEAREST = 100; // ground closer than this to an antenna is left out
+const CLOSE_IN = 500; // the horizon is read from the 10 m data out to here, where there is any
+const END_REACH = 2000; // a profile is read from the 10 m data this far from each end
+const END_NEAREST = 10; // and with it, ground counts from this close to an antenna
 const SURE_METRES = 100; // a path this far above the 1 km layer needs no finer look
 const KNOT = 5000; // rays are projected exactly every 5 km and straight in between
 
@@ -223,7 +226,12 @@ export async function openTerrain(baseUrl, options = {}) {
   async function horizon({ lat, lon, antennaMetres = 2, stepDegrees = 0.5 }) {
     if (!(await covers(lat, lon))) throw new Error('No terrain data here (outside Iceland, or at sea)');
     const before = { ...stats };
-    const ground = await heightAt(lat, lon);
+    // With the detail layer, the ground under the viewer and the closest 500 m come from the 10 m
+    // data itself: up close, 40 m cells are coarse, and on a slope they put the viewer too high.
+    const here = toGrid(lat, lon);
+    const own = layers.detail ? (await detail([here.x], [here.y]))[0] : NaN;
+    const ground = Number.isNaN(own) ? await heightAt(lat, lon) : own;
+    const zones = Number.isNaN(own) ? ZONES : [{ layer: 'detail', from: NEAREST, to: CLOSE_IN, every: 5 }, { ...ZONES[0], from: CLOSE_IN }, ...ZONES.slice(1)];
     const eye = ground + antennaMetres;
     const count = Math.round(360 / stepDegrees);
     const angles = new Float32Array(count).fill(-90);
@@ -237,7 +245,7 @@ export async function openTerrain(baseUrl, options = {}) {
         kx[a * knots + k] = g.x; ky[a * knots + k] = g.y;
       }
     }
-    for (const zone of ZONES) {
+    for (const zone of zones) {
       const steps = Math.floor((zone.to - zone.from) / zone.every);
       const xs = new Float64Array(count * steps), ys = new Float64Array(count * steps);
       for (let a = 0; a < count; a++) {
@@ -247,7 +255,14 @@ export async function openTerrain(baseUrl, options = {}) {
           ys[a * steps + s] = ky[a * knots + k] * (1 - t) + ky[a * knots + k + 1] * t;
         }
       }
-      const heights = await (zone.layer === 'near' ? sampleBlended : sample)(zone.layer, xs, ys);
+      let heights;
+      if (zone.layer === 'detail') {
+        heights = await detail(xs, ys);
+        if (heights.some(Number.isNaN)) { // holes (open sea): the 40 m layer's answer there
+          const spare = await sampleBlended('near', xs, ys);
+          heights.forEach((h, i) => { if (Number.isNaN(h)) heights[i] = spare[i]; });
+        }
+      } else heights = await (zone.layer === 'near' ? sampleBlended : sample)(zone.layer, xs, ys);
       for (let a = 0; a < count; a++) {
         let best = angles[a];
         for (let s = 0; s < steps; s++) {
@@ -337,10 +352,13 @@ export async function openTerrain(baseUrl, options = {}) {
   /**
    * The ground along the straight path between two points, for working out a radio link.
    *
-   * Reads the 40 m layer within 2 km of either end and the 100 m layer in between, leaving out
-   * the 100 m next to each end (the ends themselves are given, from heightAt). Cells hold their
-   * highest ground, so the profile reads a little high: obstacles are never missed, and a
-   * diffraction loss worked out from it errs on the large side.
+   * Within 2 km of either end it reads the 10 m data itself (the detail layer), counting the
+   * ground from 10 m out: a link is decided close to the antennas more often than anywhere else,
+   * and on a hilltop the ground just around the antenna is what gets in the way. In between it
+   * reads the 100 m layer, whose cells hold their highest ground, so that stretch reads a
+   * little high: obstacles are never missed, and a loss worked out from it errs on the large
+   * side. Layers without a detail layer use the 40 m layer near the ends and leave out the
+   * nearest 100 m.
    *
    * @param {{from: {lat: number, lon: number}, to: {lat: number, lon: number}}} ends
    * @returns distances[i] in metres from `from` and ground[i] in metres above sea level (the
@@ -351,30 +369,37 @@ export async function openTerrain(baseUrl, options = {}) {
     if (!(await covers(from.lat, from.lon)) || !(await covers(to.lat, to.lon))) return null;
     const before = { ...stats };
     const { metres: D, bearing } = span(from.lat, from.lon, to.lat, to.lon);
-    const groundA = await heightAt(from.lat, from.lon), groundB = await heightAt(to.lat, to.lon);
+    const fine10 = !!layers.detail, nearest = fine10 ? END_NEAREST : NEAREST;
     const ds = [0];
-    for (let d = NEAREST; d <= D - NEAREST; d += Math.min(d, D - d) < 2000 ? 20 : 50) ds.push(d);
+    for (let d = nearest; d <= D - nearest; d += Math.min(d, D - d) < END_REACH ? (fine10 ? 10 : 20) : 50) ds.push(d);
     ds.push(D);
     const distances = Float64Array.from(ds), ground = new Float32Array(ds.length);
-    ground[0] = groundA; ground[ds.length - 1] = groundB;
     const knots = Math.ceil(D / KNOT) + 1, kx = new Float64Array(knots + 1), ky = new Float64Array(knots + 1);
     for (let k = 0; k <= knots; k++) {
       const p = k === 0 ? from : destination(from.lat, from.lon, bearing, k * KNOT);
       const g = toGrid(p.lat, p.lon);
       kx[k] = g.x; ky[k] = g.y;
     }
-    for (const layer of ['near', 'fine']) {
-      const index = [];
-      for (let i = 1; i < ds.length - 1; i++) if ((Math.min(ds[i], D - ds[i]) < 2000) === (layer === 'near')) index.push(i);
+    const endB = toGrid(to.lat, to.lon);
+    const place = (i) => {
+      if (i === ds.length - 1) return [endB.x, endB.y];
+      const k = Math.floor(ds[i] / KNOT), t = ds[i] / KNOT - k;
+      return [kx[k] * (1 - t) + kx[k + 1] * t, ky[k] * (1 - t) + ky[k + 1] * t];
+    };
+    // Near the ends (and the ends themselves): the 10 m data where there is any, otherwise the 40 m layer.
+    const close = [], far = [];
+    for (let i = 0; i < ds.length; i++) (i === 0 || i === ds.length - 1 || Math.min(ds[i], D - ds[i]) < END_REACH ? close : far).push(i);
+    for (const [index, layer] of [[close, fine10 ? 'detail' : 'near'], [far, 'fine']]) {
       const xs = new Float64Array(index.length), ys = new Float64Array(index.length);
-      index.forEach((i, j) => {
-        const k = Math.floor(ds[i] / KNOT), t = ds[i] / KNOT - k;
-        xs[j] = kx[k] * (1 - t) + kx[k + 1] * t;
-        ys[j] = ky[k] * (1 - t) + ky[k + 1] * t;
-      });
-      const heights = await sample(layer, xs, ys);
+      index.forEach((i, j) => { [xs[j], ys[j]] = place(i); });
+      let heights = layer === 'detail' ? await detail(xs, ys) : await sample(layer, xs, ys);
+      if (layer === 'detail' && heights.some(Number.isNaN)) { // holes (open sea): the 40 m layer's answer there
+        const spare = await sample('near', xs, ys);
+        heights = heights.map((h, j) => (Number.isNaN(h) ? spare[j] : h));
+      }
       index.forEach((i, j) => { ground[i] = heights[j]; });
     }
+    if (!fine10) { ground[0] = await heightAt(from.lat, from.lon); ground[ds.length - 1] = await heightAt(to.lat, to.lon); }
     return {
       distances, ground, distanceMetres: D, bearingDegrees: bearing,
       bytesFetched: stats.bytes - before.bytes, requests: stats.requests - before.requests,
