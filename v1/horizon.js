@@ -381,7 +381,75 @@ export async function openTerrain(baseUrl, options = {}) {
     };
   }
 
-  return { manifest, covers, heightAt, horizon, sight, profile, stats };
+  // ---- The detail layer: ArcticDEM's 10 m data itself, cell for cell ----
+  // Not "highest ground per cell" like the layers above, so it is of no use for a safe horizon. It is
+  // for a terrain profile that should match one read from ArcticDEM, at a fraction of the download.
+  let detailBits = null;
+  const detailTiles = new Map(); // "ty_tx" -> Promise<Uint16Array | null>
+  function detailTile(L, ty, tx) {
+    const key = `${ty}_${tx}`;
+    if (!detailTiles.has(key)) {
+      detailTiles.set(key, (async () => {
+        if (tx < 0 || ty < 0 || tx >= L.tileCols || ty >= L.tileRows) return null;
+        detailBits ??= load(L.tilesFile).then((b) => new Uint8Array(b));
+        const bits = await detailBits, i = ty * L.tileCols + tx;
+        if (!((bits[i >> 3] >> (i & 7)) & 1)) return null; // all sea
+        const bytes = await gunzip(await load(`detail/${key}.bin.gz`));
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), out = new Uint16Array(bytes.length / 2);
+        let previous = 0;
+        for (let k = 0; k < out.length; k++) {
+          const raw = view.getUint16(k * 2, true);
+          previous = k % L.cellsPerTile === 0 ? raw : (previous + raw) & 0xffff;
+          out[k] = previous;
+        }
+        return out;
+      })());
+    }
+    return detailTiles.get(key);
+  }
+
+  /**
+   * Heights from the detail layer at grid positions (EPSG:3413 metres; see toGrid).
+   * Each is blended from the four cells around the point, as Sightline blends ArcticDEM's own
+   * files. Metres above mean sea level; sea reads 0; a hole in ArcticDEM reads NaN, never 0,
+   * and where only some of the four cells are holes the rest are blended.
+   * @param {ArrayLike<number>} xs
+   * @param {ArrayLike<number>} ys
+   * @returns {Promise<Float32Array>}
+   */
+  async function detail(xs, ys) {
+    const L = layers.detail;
+    if (!L) throw new Error('These terrain layers have no detail layer');
+    const cell = L.cellMetres, per = L.cellsPerTile, n = xs.length;
+    const ix = new Int32Array(n), iy = new Int32Array(n), wx = new Float32Array(n), wy = new Float32Array(n);
+    const wanted = new Map();
+    for (let i = 0; i < n; i++) {
+      const fx = (xs[i] - x0) / cell - 0.5, fy = (ys[i] - y0) / cell - 0.5;
+      ix[i] = Math.floor(fx); iy[i] = Math.floor(fy); wx[i] = fx - ix[i]; wy[i] = fy - iy[i];
+      for (let c = 0; c < 4; c++) {
+        const tx = Math.floor((ix[i] + (c & 1)) / per), ty = Math.floor((iy[i] + (c >> 1)) / per), key = ty * 100000 + tx;
+        if (!wanted.has(key)) wanted.set(key, detailTile(L, ty, tx));
+      }
+    }
+    const loaded = new Map(await Promise.all([...wanted].map(async ([key, p]) => [key, await p])));
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let sum = 0, weights = 0;
+      for (let c = 0; c < 4; c++) {
+        const cx = ix[i] + (c & 1), cy = iy[i] + (c >> 1), tx = Math.floor(cx / per), ty = Math.floor(cy / per);
+        const w = (c & 1 ? wx[i] : 1 - wx[i]) * (c >> 1 ? wy[i] : 1 - wy[i]);
+        if (!(w > 0)) continue;
+        const data = loaded.get(ty * 100000 + tx);
+        const raw = data ? data[(cy - ty * per) * per + (cx - tx * per)] : 0; // no tile: sea
+        if (raw === L.noData) continue;
+        sum += raw * L.heightStepMetres * w; weights += w;
+      }
+      out[i] = weights > 0 ? sum / weights : NaN;
+    }
+    return out;
+  }
+
+  return { manifest, covers, heightAt, horizon, sight, profile, detail, hasDetail: !!layers.detail, stats };
 }
 
 /** The horizon's angle on any bearing, blended between the two nearest directions. */
