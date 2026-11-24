@@ -42,19 +42,21 @@ export const SETTINGS = {
   ridges: { part: 2, choices: [false, true], about: 'lines along ridges in front of the skyline' },
   lineWidth: { part: 2, about: 'skyline width, CSS pixels' },
   ridgeWidth: { part: 2, about: 'ridge line width, CSS pixels' },
+  ridgeFade: { part: 2, about: 'how much far ridge lines fade into the haze: 0 none (as black as the skyline), 1 fully' },
   palette: { part: 3, about: "'light', 'dark' or an object of colours (see PALETTES)" },
   pixelRatio: { part: 3, about: 'canvas pixels per CSS pixel; null follows the screen, at most 2' },
 };
 
-/** Colours. near and far are the ground's nearest and farthest shades; ground is the cardboard. */
+/** Colours. near and far are the ground's nearest and farthest shades; ground is the cardboard;
+ * line is the skyline and the ridges. */
 export const PALETTES = {
-  light: { ground: '#6b7a5a', near: '#3b4732', far: '#a9b9c6', line: '#1d2419', ridge: '#27301f' },
-  dark: { ground: '#2c3427', near: '#1a2016', far: '#55636e', line: '#c9d3c2', ridge: '#9aa892' },
+  light: { ground: '#6b7a5a', near: '#3b4732', far: '#a9b9c6', line: '#1d2419' },
+  dark: { ground: '#2c3427', near: '#1a2016', far: '#55636e', line: '#c9d3c2' },
 };
 
 const BASE = {
   rayStep: 0.5, closeDetail: true, farDetail: 'smooth', antennaMetres: 2,
-  style: 'layers', layers: [2000, 15000], shades: 32, skyline: true, ridges: false, lineWidth: 1.5, ridgeWidth: 1,
+  style: 'layers', layers: [2000, 15000], shades: 32, skyline: true, ridges: true, lineWidth: 1, ridgeWidth: 1, ridgeFade: 0,
   palette: 'light', pixelRatio: null,
 };
 
@@ -63,9 +65,9 @@ const BASE = {
  * to be settled with the lab page (lab.html) on real phones.
  */
 export const PRESETS = {
-  quick: { ...BASE, farDetail: 'standard', style: 'cardboard', skyline: false },
+  quick: { ...BASE, farDetail: 'standard', style: 'cardboard', skyline: false, ridges: false },
   standard: { ...BASE },
-  detailed: { ...BASE, rayStep: 0.25, farDetail: 'fine', style: 'shaded', ridges: true },
+  detailed: { ...BASE, rayStep: 0.25, farDetail: 'fine', style: 'shaded' },
 };
 
 /** Full settings: a preset with any of its settings changed. */
@@ -199,7 +201,7 @@ export function buildScene(horizon, settings) {
     for (const [end, side] of [[0, -1], [1, -1], [1, 1], [0, -1], [1, 1], [0, 1]]) lines.push(azA, elA, azB, elB, end, side, shade, width);
   };
   let ridgeCount = 0;
-  if (s.ridges && depth) ridgeCount = ridges(depth.edges, horizon.angles, count, step, D, nearest, s.ridgeWidth, segment);
+  if (s.ridges && depth) ridgeCount = ridges(depth.edges, horizon.angles, count, step, D, nearest, s.ridgeWidth, s.ridgeFade, segment);
   if (s.skyline) for (let a = 0; a < count; a++) segment(a * step, horizon.angles[a], (a + 1) * step, horizon.angles[(a + 1) % count], 0, s.lineWidth);
 
   return {
@@ -219,10 +221,11 @@ const closest = (D, metres) => {
 
 /**
  * Ridges in front of the skyline: on each ray, ground that can be seen with ground hidden behind
- * it, for at least half as far again. Joined to the same on the next ray when they line up.
+ * it, for at least half as far again. Joined to the same on the next ray when they line up, and
+ * kept only where a ridge runs on for SHORTEST degrees or more: shorter bits are mostly noise.
  */
-function ridges(E, angles, count, step, D, nearest, width, segment) {
-  const N = D.length, RUN = 3, FLAT = 0.03, BELOW_SKYLINE = 0.1, JOIN = 0.6;
+function ridges(E, angles, count, step, D, nearest, width, fade, segment) {
+  const N = D.length, RUN = 3, FLAT = 0.03, BELOW_SKYLINE = 0.1, JOIN = 0.6, SHORTEST = 2;
   const at = (k, a) => E[k * count + a];
   const crests = Array.from({ length: count }, () => []);
   for (let a = 0; a < count; a++) {
@@ -234,20 +237,40 @@ function ridges(E, angles, count, step, D, nearest, width, segment) {
       crests[a].push(k);
     }
   }
-  let n = 0;
+  // Link each crest to the best one on the next ray; each crest is taken by at most one.
+  const next = crests.map((row) => row.map(() => -1)), taken = crests.map((row) => row.map(() => false));
   for (let a = 0; a < count; a++) {
     const b = (a + 1) % count;
-    for (const k of crests[a]) {
+    crests[a].forEach((k, i) => {
       let best = -1, gap = JOIN;
-      for (const k2 of crests[b]) {
+      crests[b].forEach((k2, j) => {
         const g = Math.abs(at(k2, b) - at(k, a));
-        if (Math.abs(k2 - k) <= 2 && g < gap) { gap = g; best = k2; }
-      }
-      if (best < 0) continue;
-      segment(a * step, at(k, a), (a + 1) * step, at(best, b), 0.2 + 0.7 * shadeOf(D[k], nearest), width);
-      n++;
-    }
+        if (!taken[b][j] && Math.abs(k2 - k) <= 2 && g < gap) { gap = g; best = j; }
+      });
+      if (best >= 0) { next[a][i] = best; taken[b][best] = true; }
+    });
   }
+  // Follow each chain from its start; draw it only if it is long enough. A ridge that goes all the
+  // way round has no start and is drawn as it is.
+  const drawn = crests.map((row) => row.map(() => false)), seen = crests.map((row) => row.map(() => false));
+  const shortest = Math.ceil(SHORTEST / step);
+  let n = 0;
+  const follow = (a, i, draw) => {
+    let length = 0;
+    for (let guard = 0; guard < count && next[a][i] >= 0 && !drawn[a][i]; guard++) {
+      const b = (a + 1) % count, j = next[a][i];
+      seen[a][i] = true;
+      if (draw) {
+        drawn[a][i] = true;
+        segment(a * step, at(crests[a][i], a), (a + 1) * step, at(crests[b][j], b), fade * shadeOf(D[crests[a][i]], nearest), width);
+        n++;
+      }
+      length++; a = b; i = j;
+    }
+    return length;
+  };
+  for (let a = 0; a < count; a++) crests[a].forEach((_, i) => { if (!taken[a][i] && follow(a, i, false) >= shortest) follow(a, i, true); });
+  for (let a = 0; a < count; a++) crests[a].forEach((_, i) => { if (!seen[a][i] && next[a][i] >= 0) follow(a, i, true); });
   return n;
 }
 
@@ -434,16 +457,23 @@ export function createView(canvas, options = {}) {
       }
       ctx.fill();
     }
-    if (settings.skyline) {
-      ctx.strokeStyle = `rgb(${parseColour(pal.line).map((v) => Math.round(v * 255)).join(',')})`;
-      ctx.lineWidth = settings.lineWidth; ctx.lineJoin = 'round';
+    // Lines: the skyline and ridges, straight from the scene, grouped by width and shade so that
+    // each group is one stroke. Pieces off the screen or behind the viewer are left out.
+    const line = parseColour(pal.line), haze = parseColour(pal.far), groups = new Map(), L = scene.lines;
+    for (let i = 0; i < L.length; i += 6 * FLOATS_LINE) {
+      const a = project(camera, f, L[i], L[i + 1]), b = project(camera, f, L[i + 2], L[i + 3]);
+      if (!a || !b || (Math.max(a[0], b[0]) < 0 || Math.min(a[0], b[0]) > f.width || Math.max(a[1], b[1]) < 0 || Math.min(a[1], b[1]) > f.height)) continue;
+      const key = `${L[i + 7]}|${Math.round(L[i + 6] * 10)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(a, b);
+    }
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (const [key, points] of groups) {
+      const [width, shade] = key.split('|').map(Number);
+      ctx.strokeStyle = `rgb(${line.map((v, i) => Math.round((v + (haze[i] - v) * (shade / 10)) * 255)).join(',')})`;
+      ctx.lineWidth = width;
       ctx.beginPath();
-      let pen = false;
-      for (let az = camera.yaw - span; az <= camera.yaw + span; az += every) {
-        const p = project(camera, f, az, angleAt(h, az));
-        if (p) ctx[pen ? 'lineTo' : 'moveTo'](p[0], p[1]);
-        pen = !!p;
-      }
+      for (let j = 0; j < points.length; j += 2) { ctx.moveTo(points[j][0], points[j][1]); ctx.lineTo(points[j + 1][0], points[j + 1][1]); }
       ctx.stroke();
     }
   }

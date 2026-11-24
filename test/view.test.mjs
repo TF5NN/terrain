@@ -102,9 +102,11 @@ test('scenes: the right bands, the skyline on top, nothing missing', async () =>
   const cardboard = buildScene(h, settingsFor('quick'));
   assert.equal(cardboard.bands, 1);
   assert.equal(cardboard.lines.length, 0);
-  const layers = buildScene(h, settingsFor('standard'));
+  const layers = buildScene(h, settingsFor('standard', { ridges: false }));
   assert.equal(layers.bands, 3);
   assert.equal(layers.lines.length, n * 6 * 8); // the skyline: one piece a ray, two triangles each
+  const ridged = buildScene(h, settingsFor('standard'));
+  assert(ridged.ridgeSegments > 0 && ridged.lines.length === (n + ridged.ridgeSegments) * 6 * 8);
   const shaded = buildScene(h, settingsFor('detailed', { shades: 16 }));
   assert(shaded.bands > 8 && shaded.bands <= 16, `${shaded.bands} bands`);
   assert(shaded.ridgeSegments > 0);
