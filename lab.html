@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Terrain view lab</title>
+  <style>
+    :root {
+      --bg: #f7f8f3; --panel: #ffffff; --text: #203b3d; --muted: #5d6f70; --line: #d8ddd3; --accent: #267c62;
+      --sky-top: #b9d3ea; --sky-bottom: #e6eef4; --overlay: #203b3d; --pass: #c2410c; --warn: #b45309;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #121614; --panel: #1b201d; --text: #dfe6e1; --muted: #93a19a; --line: #2e3631; --accent: #5cc29d;
+        --sky-top: #0f1a26; --sky-bottom: #24323f; --overlay: #dfe6e1; --pass: #fb923c; --warn: #fbbf24;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #121614; --panel: #1b201d; --text: #dfe6e1; --muted: #93a19a; --line: #2e3631; --accent: #5cc29d;
+      --sky-top: #0f1a26; --sky-bottom: #24323f; --overlay: #dfe6e1; --pass: #fb923c; --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+    main { max-width: 1100px; margin: 0 auto; padding: 12px 16px 48px; }
+    h1 { font-size: 1.2rem; margin: 4px 0 2px; }
+    p.lead { margin: 0 0 12px; color: var(--muted); font-size: .9rem; }
+    a { color: var(--accent); }
+    .stage { position: relative; width: 100%; border-radius: 10px; overflow: hidden; border: 1px solid var(--line);
+      background: linear-gradient(var(--sky-top), var(--sky-bottom)); touch-action: none; user-select: none; -webkit-user-select: none; }
+    .stage canvas, .stage svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    .stage svg text { fill: var(--overlay); font-size: 11px; paint-order: stroke; stroke: var(--sky-bottom); stroke-width: 3px; }
+    .stage .level { stroke: var(--overlay); stroke-opacity: .35; fill: none; stroke-dasharray: 2 4; }
+    .stage .tick { stroke: var(--overlay); stroke-opacity: .6; }
+    .stage .pass { stroke: var(--pass); stroke-width: 2.5; fill: none; }
+    .stage .pass.hidden { stroke-dasharray: 3 5; stroke-opacity: .7; }
+    .stage .probe { fill: var(--pass); }
+    .busy { position: absolute; top: 8px; left: 8px; padding: 3px 10px; border-radius: 99px; font-size: .8rem;
+      background: var(--panel); color: var(--text); border: 1px solid var(--line); display: none; }
+    .busy.on { display: block; }
+    .readout { font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); margin: 8px 2px 14px; }
+    .readout b { color: var(--text); font-weight: 600; }
+    .readout .bad { color: var(--warn); }
+    .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    button, select, input { font: inherit; color: var(--text); }
+    button { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; cursor: pointer; min-height: 40px; }
+    button.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+    .groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+    fieldset { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); margin: 0; padding: 8px 12px 12px; min-width: 0; }
+    legend { font-weight: 600; font-size: .9rem; padding: 0 4px; }
+    legend small { font-weight: 400; color: var(--muted); }
+    label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; font-size: .9rem; }
+    label > span { color: var(--muted); }
+    select, input[type=number], input[type=text] { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 6px; min-height: 34px; max-width: 60%; }
+    input[type=range] { width: 55%; }
+    input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .row input[type=text] { flex: 1; max-width: none; min-width: 0; }
+    .note { color: var(--muted); font-size: .8rem; margin: 6px 0 0; }
+    #error { color: var(--warn); font-size: .9rem; min-height: 1.2em; margin: 4px 2px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Terrain view lab</h1>
+  <p class="lead">Try every way of drawing the terrain and see what it costs. Drag to turn, pinch or scroll to zoom, tap to probe a direction.
+    The settings are kept in the page's link, so a setup can be shared. <a href="./">About the terrain layers</a></p>
+
+  <div class="stage" id="stage">
+    <canvas id="canvas" aria-label="Terrain view"></canvas>
+    <svg id="overlay" aria-hidden="true"></svg>
+    <div class="busy" id="busy">Calculating…</div>
+  </div>
+  <div id="error" role="status"></div>
+  <div class="readout" id="readout"></div>
+
+  <div class="presets" id="presets"></div>
+
+  <div class="groups">
+    <fieldset>
+      <legend>Spot</legend>
+      <label><span>Place</span><select id="spot"></select></label>
+      <div class="row"><input type="text" id="latlon" placeholder="64.1293, -21.919" inputmode="decimal"><button id="go">Go</button></div>
+      <div class="row" style="margin-top:8px"><button id="here">Use my location</button></div>
+    </fieldset>
+    <fieldset>
+      <legend>1 · Calculation <small>fetches and works it out again</small></legend>
+      <label><span>Ray every</span><select data-key="rayStep" data-type="number"><option value="1">1°</option><option value="0.5">0.5°</option><option value="0.25">0.25°</option></select></label>
+      <label><span>Far detail</span><select data-key="farDetail"><option>standard</option><option>smooth</option><option>fine</option><option>finest</option></select></label>
+      <label><span>10 m data close in</span><input type="checkbox" data-key="closeDetail"></label>
+      <label><span>Eye height, m</span><input type="number" data-key="antennaMetres" data-type="number" min="0" max="100" step="0.5"></label>
+    </fieldset>
+    <fieldset>
+      <legend>2 · Look <small>rebuilds the shapes</small></legend>
+      <label><span>Style</span><select data-key="style"><option>cardboard</option><option>layers</option><option>shaded</option></select></label>
+      <label><span>Layer breaks, km</span><input type="text" data-key="layers" data-type="km" placeholder="2, 15"></label>
+      <label><span>Shades</span><select data-key="shades" data-type="number"><option>8</option><option>16</option><option>32</option><option>63</option></select></label>
+      <label><span>Skyline line</span><input type="checkbox" data-key="skyline"></label>
+      <label><span>Ridge lines</span><input type="checkbox" data-key="ridges"></label>
+      <label><span>Skyline width</span><input type="number" data-key="lineWidth" data-type="number" min="0.5" max="6" step="0.25"></label>
+      <label><span>Ridge width</span><input type="number" data-key="ridgeWidth" data-type="number" min="0.5" max="6" step="0.25"></label>
+    </fieldset>
+    <fieldset>
+      <legend>3 · View <small>just draws again</small></legend>
+      <label><span>Field of view <b id="fovValue"></b></span><input type="range" id="fov" min="15" max="170" step="1"></label>
+      <label><span>Shape</span><select id="shape"><option value="0.75">4:3 (the apps today)</option><option value="0.5625">16:9</option><option value="1">square</option><option value="1.3333">3:4 portrait</option><option value="1.7778">9:16 portrait</option><option value="fill">fill the screen</option></select></label>
+      <label><span>Resolution</span><select data-key="pixelRatio" data-type="ratio"><option value="auto">screen (at most 2×)</option><option value="0.5">0.5×</option><option value="1">1×</option><option value="1.5">1.5×</option><option value="2">2×</option><option value="3">3×</option></select></label>
+      <label><span>Colours</span><select data-key="palette"><option>light</option><option>dark</option></select></label>
+      <label><span>Drawing with</span><select id="renderer"><option value="webgl">WebGL (graphics chip)</option><option value="canvas">2D canvas (fallback)</option></select></label>
+      <div class="row" style="margin-top:8px"><button id="spin" class="primary">Spin test</button><button id="copy">Copy link</button></div>
+      <p class="note">Spin test: one full turn in 4 seconds, counting frames that came late. Anything late is stutter.</p>
+    </fieldset>
+  </div>
+</main>
+<script type="module" src="./lab.js"></script>
+</body>
+</html>

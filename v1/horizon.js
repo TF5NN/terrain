@@ -66,6 +66,36 @@ const ZONES = [
   { layer: 'fine', from: 2000, to: 15000, every: 50 },
   { layer: 'medium', from: 15000, to: 100000, every: 250 },
 ];
+// farDetail: how finely the ground from 2 km out is read. 'standard' is the above. The others are
+// for drawing the terrain (see view.js): they blend between cells, as the 40 m layer already does,
+// and read finer layers further out, so a skyline drawn large is not a staircase. Blending follows
+// the ground between cells' highest points, so these read slightly lower than 'standard', which
+// stays the safe choice for "will I see it?". Measured in README.md.
+const FAR_ZONES = {
+  standard: ZONES,
+  smooth: [
+    { layer: 'near', from: 100, to: 2000, every: 20 },
+    { layer: 'fine', from: 2000, to: 15000, every: 50, blend: true },
+    { layer: 'medium', from: 15000, to: 100000, every: 250, blend: true },
+  ],
+  fine: [
+    { layer: 'near', from: 100, to: 5000, every: 20 },
+    { layer: 'fine', from: 5000, to: 40000, every: 50, blend: true },
+    { layer: 'medium', from: 40000, to: 100000, every: 250, blend: true },
+  ],
+  finest: [
+    { layer: 'near', from: 100, to: 15000, every: 20 },
+    { layer: 'fine', from: 15000, to: 100000, every: 50, blend: true },
+  ],
+};
+/** The farDetail choices, from quickest to finest. */
+export const FAR_DETAIL = Object.keys(FAR_ZONES);
+// depth: the highest ground nearer than each of these distances, on every bearing. 64 steps from
+// 10 m to 100 km, each about 16% further than the last. Everything view.js draws is built from it.
+const DEPTH_STEPS = 64;
+/** The distances, in metres, that a horizon's depth.edges are given for. */
+export const DEPTH_DISTANCES = Float32Array.from({ length: DEPTH_STEPS }, (_, k) => 10 * 10 ** ((4 * k) / (DEPTH_STEPS - 1)));
+const CHUNK_SAMPLES = 150000; // rays are worked through in groups of about this many samples
 const NEAREST = 100; // ground closer than this to an antenna is left out
 const CLOSE_IN = 500; // with closeDetail, the horizon is read from the 10 m data out to here
 const CLOSE_NEAREST = 10; // and with it, ground counts from this close to the viewer
@@ -225,9 +255,15 @@ export async function openTerrain(baseUrl, options = {}) {
    *   100 m. On a hilltop or a slope this is the difference between a horizon that is roughly
    *   right and one that misses the hillside beside the viewer. About twice the download. Off
    *   unless asked for; the result's closeDetail and nearestMetres say what was done.
+   *   farDetail: 'standard' (the default), 'smooth', 'fine' or 'finest': how finely the ground
+   *   from 2 km out is read, for drawing (see FAR_ZONES above and README.md).
+   *   depth: also return depth.edges, the highest ground nearer than each of DEPTH_DISTANCES on
+   *   every bearing: edges[k * angles.length + i] is in degrees, -90 where there is none. What
+   *   view.js draws the ground in front of the skyline from.
    * @returns angles[i] is the terrain's elevation angle, in degrees, on true bearing i * stepDegrees
    */
-  async function horizon({ lat, lon, antennaMetres = 2, stepDegrees = 0.5, closeDetail = false }) {
+  async function horizon({ lat, lon, antennaMetres = 2, stepDegrees = 0.5, closeDetail = false, farDetail = 'standard', depth = false }) {
+    if (!FAR_ZONES[farDetail]) throw new Error(`Unknown farDetail '${farDetail}'`);
     if (!(await covers(lat, lon))) throw new Error('No terrain data here (outside Iceland, or at sea)');
     const before = { ...stats };
     // With closeDetail, the ground under the viewer and the closest 500 m come from the 10 m data
@@ -239,13 +275,17 @@ export async function openTerrain(baseUrl, options = {}) {
     const ground = Number.isNaN(own) ? await heightAt(lat, lon) : own;
     // The 10 m data draws no false walls close in, as the 40 m cells did, so with it the ground
     // counts from 10 m out, not 100 m: on a slope, the hillside beside the viewer is the horizon.
-    const zones = Number.isNaN(own) ? ZONES : [
+    const far = FAR_ZONES[farDetail];
+    const zones = Number.isNaN(own) ? far : [
       { layer: 'detail', from: CLOSE_NEAREST, to: NEAREST, every: 2.5 },
       { layer: 'detail', from: NEAREST, to: CLOSE_IN, every: 5 },
-      { ...ZONES[0], from: CLOSE_IN }, ...ZONES.slice(1)];
+      { ...far[0], from: CLOSE_IN }, ...far.slice(1)];
     const eye = ground + antennaMetres;
     const count = Math.round(360 / stepDegrees);
     const angles = new Float32Array(count).fill(-90);
+    // With depth: the running highest angle is written down as each ray passes each distance.
+    const edges = depth ? new Float32Array(DEPTH_STEPS * count).fill(-90) : null;
+    const passed = depth ? new Uint8Array(count) : null; // how many of DEPTH_DISTANCES each ray is past
     const knots = Math.round(ZONES[ZONES.length - 1].to / KNOT) + 1;
     // Exact grid positions along every ray, every 5 km.
     const kx = new Float64Array(count * knots), ky = new Float64Array(count * knots);
@@ -258,36 +298,46 @@ export async function openTerrain(baseUrl, options = {}) {
     }
     for (const zone of zones) {
       const steps = Math.floor((zone.to - zone.from) / zone.every);
-      const xs = new Float64Array(count * steps), ys = new Float64Array(count * steps);
-      for (let a = 0; a < count; a++) {
-        for (let s = 0; s < steps; s++) {
-          const d = zone.from + s * zone.every, k = Math.min(knots - 2, Math.floor(d / KNOT)), t = d / KNOT - k;
-          xs[a * steps + s] = kx[a * knots + k] * (1 - t) + kx[a * knots + k + 1] * t;
-          ys[a * steps + s] = ky[a * knots + k] * (1 - t) + ky[a * knots + k + 1] * t;
+      // A group of rays at a time, so that fine settings do not need hundreds of MB at once.
+      const group = Math.max(1, Math.floor(CHUNK_SAMPLES / steps));
+      for (let first = 0; first < count; first += group) {
+        const rays = Math.min(group, count - first);
+        const xs = new Float64Array(rays * steps), ys = new Float64Array(rays * steps);
+        for (let r = 0; r < rays; r++) {
+          const a = first + r;
+          for (let s = 0; s < steps; s++) {
+            const d = zone.from + s * zone.every, k = Math.min(knots - 2, Math.floor(d / KNOT)), t = d / KNOT - k;
+            xs[r * steps + s] = kx[a * knots + k] * (1 - t) + kx[a * knots + k + 1] * t;
+            ys[r * steps + s] = ky[a * knots + k] * (1 - t) + ky[a * knots + k + 1] * t;
+          }
         }
-      }
-      let heights;
-      if (zone.layer === 'detail') {
-        heights = await detail(xs, ys);
-        if (heights.some(Number.isNaN)) { // holes (open sea): the 40 m layer's answer there
-          const spare = await sampleBlended('near', xs, ys);
-          heights.forEach((h, i) => { if (Number.isNaN(h)) heights[i] = spare[i]; });
+        let heights;
+        if (zone.layer === 'detail') {
+          heights = await detail(xs, ys);
+          if (heights.some(Number.isNaN)) { // holes (open sea): the 40 m layer's answer there
+            const spare = await sampleBlended('near', xs, ys);
+            heights.forEach((h, i) => { if (Number.isNaN(h)) heights[i] = spare[i]; });
+          }
+        } else heights = await (zone.layer === 'near' || zone.blend ? sampleBlended : sample)(zone.layer, xs, ys);
+        for (let r = 0; r < rays; r++) {
+          const a = first + r;
+          let best = angles[a];
+          for (let s = 0; s < steps; s++) {
+            const d = zone.from + s * zone.every;
+            if (edges) while (passed[a] < DEPTH_STEPS && DEPTH_DISTANCES[passed[a]] <= d) edges[passed[a]++ * count + a] = best;
+            const rise = heights[r * steps + s] - eye - (d * d) / (2 * REFRACTION_K * EARTH_RADIUS);
+            const angle = Math.atan2(rise, d) / DEG;
+            if (angle > best) best = angle;
+          }
+          angles[a] = best;
         }
-      } else heights = await (zone.layer === 'near' ? sampleBlended : sample)(zone.layer, xs, ys);
-      for (let a = 0; a < count; a++) {
-        let best = angles[a];
-        for (let s = 0; s < steps; s++) {
-          const d = zone.from + s * zone.every;
-          const rise = heights[a * steps + s] - eye - (d * d) / (2 * REFRACTION_K * EARTH_RADIUS);
-          const angle = Math.atan2(rise, d) / DEG;
-          if (angle > best) best = angle;
-        }
-        angles[a] = best;
       }
     }
+    if (edges) for (let a = 0; a < count; a++) while (passed[a] < DEPTH_STEPS) edges[passed[a]++ * count + a] = angles[a];
     return {
       angles, stepDegrees, groundMetres: ground, eyeMetres: eye,
-      closeDetail: !Number.isNaN(own), nearestMetres: Number.isNaN(own) ? NEAREST : CLOSE_NEAREST,
+      closeDetail: !Number.isNaN(own), nearestMetres: Number.isNaN(own) ? NEAREST : CLOSE_NEAREST, farDetail,
+      ...(edges && { depth: { distances: DEPTH_DISTANCES, edges } }),
       bytesFetched: stats.bytes - before.bytes, requests: stats.requests - before.requests,
     };
   }

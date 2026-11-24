@@ -103,6 +103,108 @@ profile in Iceland.
   by more than 0.8 m, and the layer is not biased high or low.
 - `terrain.hasDetail` says whether the layers have it.
 
+## Drawing the view
+
+**Experimental:** the settings and functions below may still change until the
+apps use them. Try them on the [lab page](https://tf5nn.github.io/terrain/lab.html).
+
+`v1/view.js` draws the terrain as seen from a point onto a `<canvas>`: as one
+flat cut-out (as Northbound and Sightline draw it today), as a few cut-outs by
+distance, or as ground shaded by distance, with lines along the skyline and the
+ridges in front of it if wanted. The app draws everything else (the sky, a
+satellite's pass, the sun and moon, stations, labels) on top, in the same
+projection.
+
+```js
+import { openTerrainInBackground } from 'https://tf5nn.github.io/terrain/v1/background.js';
+import { createView, buildScene, settingsFor, horizonOptions } from 'https://tf5nn.github.io/terrain/v1/view.js';
+
+const terrain = await openTerrainInBackground('https://tf5nn.github.io/terrain/v1/');
+const settings = settingsFor('standard', { palette: 'dark' });
+const horizon = await terrain.horizon({ lat, lon, ...horizonOptions(settings) });
+const view = createView(canvas, { settings, camera: { yaw: 120, pitch: 10, fieldDegrees: 110 }, onDraw: drawMarks });
+view.setScene(buildScene(horizon, settings));
+
+view.setCamera({ yaw: 140 });          // when the visitor drags; drawn at the next frame
+view.project(az, el);                  // where a direction is on the canvas, in CSS pixels, or null
+view.behind(az, el);                   // whether the drawn skyline hides it
+```
+
+The work is in three parts, so that turning the view never stutters:
+
+| Part | What | When | Cost |
+|---|---|---|---|
+| 1. Calculation | `terrain.horizon()`: tiles and rays | a new spot, or a change to `rayStep`, `farDetail`, `closeDetail`, `antennaMetres` | 60–270 KB and 0.2–0.8 s on a desktop, in a worker |
+| 2. Scene | `buildScene()`: the shapes, in degrees | a change to how it looks | 20–75 ms |
+| 3. Frame | the camera turns | every frame while dragging | about 1 ms: the shapes are already on the graphics card |
+
+- `openTerrainInBackground` is `openTerrain` in a web worker: the same
+  functions, but a slow calculation never holds the page up. Where a worker
+  cannot be started it quietly runs on the page (`terrain.background` says
+  which).
+- With WebGL a frame costs about the same at every setting: the scene is handed
+  to the graphics card once and each frame only sends the camera. Without
+  WebGL, `view.js` draws on a 2D canvas as the apps do today, with at most four
+  shades of ground. `view.info.renderer` says which.
+- `tools/check_view.cjs` draws 60 directions of view both ways in a real
+  browser and compares them pixel by pixel.
+
+**Settings** (`SETTINGS` in `view.js` lists them all, with what each redoes):
+`style` (`cardboard`, `layers`, `shaded`), `layers` (where one cut-out ends and
+the next begins, default 2 km and 15 km), `shades` (steps of distance for
+`shaded`), `skyline` and `ridges` (lines, on or off, and their widths),
+`rayStep`, `farDetail`, `closeDetail`, `antennaMetres`, `palette` (`light`,
+`dark` or your own colours) and `pixelRatio` (canvas pixels per CSS pixel;
+by default the screen's, at most 2). The field of view is part of the camera,
+so an app can set it from the screen's size and the way the phone is held, and
+change it to zoom.
+
+**Presets** are first guesses, to be settled on real phones with the lab page:
+
+| Preset | Look | Calculation |
+|---|---|---|
+| `quick` | one cut-out, no line: what the apps draw today | rays every 0.5°, `farDetail: 'standard'` |
+| `standard` | three cut-outs (nearer than 2 km, 2–15 km, beyond), skyline line | rays every 0.5°, `farDetail: 'smooth'` |
+| `detailed` | 32 shades of distance, skyline and ridge lines | rays every 0.25°, `farDetail: 'fine'` |
+
+All three ask for `closeDetail`.
+
+### farDetail: finer far ground for drawing
+
+From 2 km out the horizon reads the 100 m layer, whose heights come in 20 m
+steps, and from 15 km the 1 km layer. That is ample for the angle of a
+mountain, but drawn large the far skyline is a staircase. `farDetail` reads it
+more finely:
+
+| `farDetail` | Reads | Download | 95% of directions within, against the 10 m data |
+|---|---|---|---|
+| `standard` (the default) | as above | 44 KB | 1.69° |
+| `smooth` | the same, blended between cells | 44 KB | 1.61° |
+| `fine` | 40 m layer to 5 km, 100 m to 40 km, all blended | 149 KB | 1.53° |
+| `finest` | 40 m layer to 15 km, 100 m beyond, all blended | 584 KB in about 240 requests | 1.51° |
+
+Averages over the seven spots under "How good it is", without `closeDetail`;
+with it the downloads are about 40 KB more. Blending follows the ground between
+the cells' highest points, so the finer choices read a few hundredths of a
+degree lower on average than `standard`, which stays the safe choice for
+"will I see it?".
+
+**The skyline the app tests a pass against should be the one it draws.** With
+`view.behind()`, or with `angleAt()` on the same horizon, it is. An app that
+draws with `farDetail: 'fine'` but decides "clear" or "blocked" from a
+`standard` horizon may show a satellite behind a ridge it calls clear, or the
+other way round, by a few tenths of a degree.
+
+### depth: what the ground in front of the skyline is made of
+
+`horizon({ ..., depth: true })` also gives `depth.edges`: for 64 distances from
+10 m to 100 km (`DEPTH_DISTANCES`, each about 16% further than the last), the
+highest ground nearer than that distance on every bearing.
+`edges[k * angles.length + i]` is in degrees, −90 where there is none; the
+last of them is the skyline itself. Everything `view.js` draws comes from it.
+It costs no download and no noticeable time, and is about 180 KB of numbers
+at 0.5° rays.
+
 ## The idea
 
 Each cell of a layer holds the **highest ground inside it**, like the maximum
@@ -242,6 +344,7 @@ python3 tools/make_detail_reference.py /path/to/the/tifs   # reference heights f
 python3 tools/make_close_reference.py /path/to/the/tifs    # true horizons from the 2 m data (needs a connection)
 python3 tools/make_sight_reference.py /path/to/the/tifs   # reference lines of sight for the tests
 npm test
+node tools/check_view.cjs                            # the drawing, in a browser (needs playwright)
 ```
 
 `tools/geoid.json` is the sea-level table from Sightline (EGM96, every half
